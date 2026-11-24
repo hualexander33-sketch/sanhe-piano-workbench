@@ -1,0 +1,56 @@
+name: Publish original workbench
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: pages
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build the original UI
+        run: python deploy/public_site/build.py . _site
+      - name: Prepare the approved business snapshot
+        env:
+          WORKBENCH_STORAGE_KEY: ${{ secrets.WORKBENCH_STORAGE_KEY }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { createDecipheriv } from 'node:crypto';
+          const bytes = fs.readFileSync('workbench.bin');
+          const decipher = createDecipheriv('aes-256-gcm', Buffer.from(process.env.WORKBENCH_STORAGE_KEY, 'base64url'), bytes.subarray(0,12));
+          decipher.setAuthTag(bytes.subarray(-16));
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/display.zip', Buffer.concat([decipher.update(bytes.subarray(12,-16)),decipher.final()]));
+          JS
+          unzip -oq "$RUNNER_TEMP/display.zip" initial.json ledger.zip -d _site
+      - name: Package the business report runtime
+        run: |
+          curl --retry 3 --retry-all-errors -fsSL https://github.com/pyodide/pyodide/releases/download/0.27.7/pyodide-core-0.27.7.tar.bz2 -o "$RUNNER_TEMP/core.tar.bz2"
+          echo "9bc8f127db6c590b191b9aee754022cb41b1a36c7bac233776c11c5ecb541be8  $RUNNER_TEMP/core.tar.bz2" | sha256sum --check
+          mkdir -p _site/runtime
+          tar xjf "$RUNNER_TEMP/core.tar.bz2" --strip-components=1 -C _site/runtime
+          cp runtime/*.whl _site/runtime/
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy workbench
+        id: deployment
+        uses: actions/deploy-pages@v5
