@@ -1,20 +1,27 @@
 """Package the existing frontend for a repository subpath, without changing its templates or design."""
 from pathlib import Path
-import shutil,sys,zipfile
+import os,re,shutil,sys,zipfile
 source,out=map(Path,sys.argv[1:3])
 out.mkdir(parents=True,exist_ok=True)
 assets=out/'assets'
 assets.mkdir(exist_ok=True)
+commit=os.environ.get('GITHUB_SHA','')
+version='?v='+commit if re.fullmatch(r'[0-9a-f]{7,64}',commit) else ''
 for file in (source/'web').iterdir():
     if not file.is_file() or file.name=='index.html':
         continue
     if file.suffix in ('.css','.js'):
         # URLs are relative to the document in HTML markup, and to assets/ in the stylesheet.
         prefix='./' if file.suffix=='.css' else './assets/'
-        (assets/file.name).write_text(file.read_text().replace('/assets/',prefix))
+        content=file.read_text().replace('/assets/',prefix)
+        if version and file.suffix=='.js':
+            content=re.sub(r"""((?:from|import)\s*['"]\./[\w.-]+\.js)(['"])""",
+                           lambda match: match[1]+version+match[2],content)
+        (assets/file.name).write_text(content)
     else:
         shutil.copyfile(file,assets/file.name)
 html=(source/'web/index.html').read_text().replace('/assets/','./assets/').replace('src="./assets/app.js"','src="./host.js"')
+html=html.replace('./host.js"', './host.js'+version+'"').replace('./assets/style.css"', './assets/style.css'+version+'"')
 (out/'index.html').write_text(html)
 here=Path(__file__).parent
 for f in ('host.js','queries.js'):

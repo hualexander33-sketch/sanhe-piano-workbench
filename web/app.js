@@ -29,6 +29,7 @@ import {
   go,
 } from './ui.js';
 import './dashboard.js';
+import { reportScope } from './ui.js';
 import './ledger.js';
 import './entries.js';
 import './import.js';
@@ -46,6 +47,7 @@ const parents = {
   import: 'lessons',
   batches: 'lessons',
   profile: 'students',
+  pack: 'students',
   teacher: 'teachers',
   details: 'home',
   settings: 'home',
@@ -61,6 +63,7 @@ const captions = {
   import: '每周导入',
   batches: '导入批次',
   profile: '学生详情',
+  pack: '课包详情',
   teacher: '老师详情',
   details: '来源明细',
   settings: '系统设置',
@@ -93,6 +96,9 @@ async function render() {
   if (!session.meta) return;
   const { page, params } = route(),
     version = ++epoch;
+  if (params.period && ['home','lessons','teachers','teacher','accounts'].includes(page)) {
+    session.filter = reportScope(params);
+  }
   closeDialog();
   const active = parents[page] || page;
   for (const e of document.querySelectorAll('[data-nav]')) {

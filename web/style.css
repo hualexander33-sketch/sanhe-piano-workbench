@@ -533,6 +533,45 @@ strong,
 .duo-grid.lower {
   grid-template-columns: 1.12fr 1fr;
 }
+.teacher-charts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.scope-heading {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+.linked-metrics {
+  row-gap: 16px;
+}
+.report-note, .cell-note, .comparison-key {
+  display: block;
+  color: var(--quiet);
+  font-size: 12px;
+}
+.report-note { margin: 12px 0 0; }
+.comparison-mobile { display: none; }
+.teacher-summary { border-bottom: 1px solid var(--line); }
+.teacher-summary summary {
+  display: grid;
+  grid-template-columns: minmax(4em, 1fr) auto minmax(7em, auto);
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  cursor: pointer;
+}
+.teacher-summary summary strong { text-align: right; }
+.teacher-summary summary b::before { content: '▸ '; color: var(--quiet); }
+.teacher-summary[open] summary b::before { content: '▾ '; }
+.teacher-summary dl { margin: 0 0 12px; }
+.teacher-summary dl div { display: flex; justify-content: space-between; padding: 4px; }
+.teacher-summary dt { color: var(--quiet); }
+.teacher-summary dd { margin: 0; }
+@media (max-width: 740px) {
+  .comparison-wide { display: none; }
+  .comparison-mobile { display: block; }
+  .periodbar .segments { flex-wrap: wrap; }
+  .periodbar .segment { padding-inline: 7px; white-space: nowrap; }
+}
 .panel {
   min-width: 0;
   background: var(--white);

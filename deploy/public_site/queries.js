@@ -4,7 +4,7 @@ async function boot() {
   importScripts(base+'pyodide.js');
   const engine = await loadPyodide({indexURL:base});
   const file = async name => {
-    const response = await fetch(new URL(name,self.location.href));
+    const response = await fetch(new URL(name+self.location.search,self.location.href));
     if (!response.ok) throw Error('展示数据暂未加载');
     return new Uint8Array(await response.arrayBuffer());
   };

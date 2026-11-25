@@ -1,7 +1,8 @@
 // The presentation modules are the original workbench. Only its read transport changes on Pages.
 const networkFetch = window.fetch.bind(window);
 const root = new URL('./', import.meta.url);
-const initial = networkFetch(new URL('initial.json', root), {cache: 'no-cache'}).then(response => {
+const version = new URL(import.meta.url).search;
+const initial = networkFetch(new URL('initial.json' + version, root), {cache: 'no-cache'}).then(response => {
   if (!response.ok) throw Error('工作台数据暂未加载');
   return response.json();
 });
@@ -14,7 +15,7 @@ const pending = new Map();
 
 function query(name, params) {
   if (!worker) {
-    worker = new Worker(new URL('queries.js', root));
+    worker = new Worker(new URL('queries.js' + version, root));
     worker.onmessage = ({data}) => {
       const finish = pending.get(data.id);
       if (finish) {
@@ -47,19 +48,19 @@ window.fetch = async function(input, options = {}) {
   }
   if (path === '/boot') return json({session:true, demo:false, app:'qinhang-web-v1'});
   const stored = await initial;
-  if (path === '/api/session' || path === '/api/read/meta') return json(stored.session);
+  const dateInChina = new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+  if (path === '/api/session' || path === '/api/read/meta') return json({...stored.session,today:dateInChina});
   if (!path.startsWith('/api/read/')) return json({error:'没有此查询'}, 404);
   const name = path.slice('/api/read/'.length);
   const params = Object.fromEntries(url.searchParams);
-  const dateInChina = new Date(Date.now()+8*3600000).toISOString().slice(0,10);
   if (stored.asof === dateInChina) {
     if (name === 'report' && Object.keys(params).every(k => k === 'period')) {
       const report = stored.reports[params.period || 'month'];
-      if (report) return json(report);
+      if (report && 'reference_pay' in report.stats) return json(report);
     }
     if ((name === 'students' || name === 'packages') && !Object.keys(params).length) return json(stored[name]);
   }
   return query(name, params);
 };
 if (location.hash.startsWith('#k=')) history.replaceState(null,'',location.pathname+location.search+'#/home');
-await import('./assets/app.js');
+await import('./assets/app.js' + version);

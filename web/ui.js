@@ -26,7 +26,10 @@ export const statuses = {
   withdrawn: '已撤回',
   none: '无扣课',
 };
-export const periods = { week: '本周', month: '本月', quarter: '本季', year: '本年', custom: '自定义' };
+export const periods = { week: '本周', month: '本月', last_month: '上月', quarter: '本季', year: '本年', all: '全部历史', custom: '自定义' };
+const scopeKeys = ['period', 'anchor', 'start', 'end', 'teacher', 'course', 'type'];
+export const reportScope = (params) =>
+  Object.fromEntries(scopeKeys.filter((key) => params[key]).map((key) => [key, params[key]]));
 export const admin = () => !!session.meta && session.meta.account.role !== 'teacher';
 export const owner = () => session.meta?.account.role === 'owner';
 export const canRecord = () => admin() || !!session.meta?.account.can_record;
@@ -226,6 +229,9 @@ export async function exportCsv(p) {
 }
 export const metrics = (arr) =>
   `<div class="mini-metrics">${arr.map(([label, value]) => `<div><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`).join('')}</div>`;
+export const metricLinks = (items) =>
+  `<div class="balance-grid linked-metrics">${items.map(([label, value, url, note]) =>
+    `<a href="${esc(url)}"><small>${esc(label)}</small><strong>${esc(value)}</strong>${note ? `<span>${esc(note)}</span>` : ''}</a>`).join('')}</div>`;
 export const crumb = (page, name, params = {}) => link(page, '‹ ' + name, params, 'back-link');
 export function scopeBar(r) {
   const f = session.filter;
@@ -242,11 +248,18 @@ actions.period = (el) => {
     actions.filters(el, true);
     return;
   }
-  session.filter = { ...session.filter, period: p };
-  delete session.filter.start;
-  delete session.filter.end;
-  reload();
+  const next = { ...session.filter, period: p };
+  delete next.start;
+  delete next.end;
+  delete next.anchor;
+  applyScope(next);
 };
+function applyScope(scope) {
+  const {page, params} = route();
+  session.filter = reportScope(scope);
+  for (const key of scopeKeys) delete params[key];
+  go(page, { ...params, ...session.filter });
+}
 actions.filters = (el, custom = false) => {
   const f = session.filter;
   showDialog(
@@ -260,7 +273,5 @@ forms.filters = (f) => {
     delete p.start;
     delete p.end;
   } else if (!p.start || !p.end || p.start > p.end) throw Error('请核对起止日期');
-  session.filter = p;
-  closeDialog();
-  reload();
+  applyScope(p);
 };

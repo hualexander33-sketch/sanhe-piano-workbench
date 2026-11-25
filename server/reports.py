@@ -24,11 +24,24 @@ from .common import (
 from .lessons import dependencies, summary
 
 
-def period(p):
+def period(p, db=None):
     anchor = date.fromisoformat(day(p.get("anchor") or today()))
     scale = p.get("period", "month")
     if p.get("start") or p.get("end") or scale == "custom":
         first, last = day(p.get("start")), day(p.get("end"))
+    elif scale == "all":
+        first = one(db, """SELECT min(d) AS first FROM (
+            SELECT min(day) d FROM lessons UNION ALL SELECT min(since) FROM packages
+            UNION ALL SELECT min(day) FROM movements UNION ALL SELECT min(day) FROM cash
+            UNION ALL SELECT min(day) FROM payables UNION ALL SELECT min(day) FROM payments
+            UNION ALL SELECT min(day) FROM historical_cash UNION ALL SELECT min(day) FROM settlements
+            UNION ALL SELECT min(nullif(enrolled,'')) FROM students
+        )""")["first"]
+        last = min(anchor.isoformat(), today())
+        first = min(first or last, last)
+    elif scale == "last_month":
+        end = anchor.replace(day=1) - timedelta(days=1)
+        first, last = end.replace(day=1).isoformat(), end.isoformat()
     else:
         if scale == "week":
             start = anchor - timedelta(days=anchor.weekday())
@@ -182,6 +195,7 @@ def student_list(db, a, p):
             **s,
             **r,
             "package_courses": list(dict.fromkeys(pk["course"] for pk in mine)),
+            "shared_package": any(len(pk["member_ids"]) > 1 for pk in mine),
             "solo": sum(pk["remaining"] for pk in mine if pk["type"] == "solo"),
             "duo": sum(pk["remaining"] for pk in mine if pk["type"] == "duo"),
         }
@@ -196,12 +210,15 @@ def profile(db, a, p):
     sid = p.get("id")
     require(can_student(db, a, sid), "未授权访问该档案", 403)
     s = get(db, "students", sid)
-    details = packs(db, a, {"student": sid})
+    when = day(p.get("asof") or today())
+    details = packs(db, a, {"student": sid, "asof": when})
     records = many(
         db,
         """SELECT l.id,l.day,l.clock,l.teacher,l.type,l.minutes,l.history,l.change_note,r.state,r.units,r.pack,r.value,r.status,
-        r.content,r.next_focus,l.course FROM lessons l JOIN attendance r ON r.lesson=l.id WHERE r.student=? AND l.active=1 ORDER BY l.day DESC,l.clock DESC""",
-        (sid,),
+        r.content,r.next_focus,l.course,coalesce(pk.main_at_sale,s.main_teacher) main_teacher
+        FROM lessons l JOIN attendance r ON r.lesson=l.id JOIN students s ON s.id=r.student
+        LEFT JOIN packages pk ON pk.id=r.pack WHERE r.student=? AND l.active=1 AND l.day<=?
+        ORDER BY l.day DESC,l.clock DESC,l.rowid DESC""", (sid, when),
     )
     cash = []
     changes = []
@@ -210,31 +227,31 @@ def profile(db, a, p):
     if a["role"] != "teacher":
         cash = many(
             db,
-            "SELECT c.* FROM cash c JOIN package_students m ON m.pack=c.pack WHERE m.student=? ORDER BY c.day DESC,c.rowid DESC",
-            (sid,),
+            "SELECT c.* FROM cash c JOIN package_students m ON m.pack=c.pack WHERE m.student=? AND c.day<=? ORDER BY c.day DESC,c.rowid DESC",
+            (sid, when),
         )
         changes = many(
             db,
-            """SELECT m.* FROM movements m JOIN package_students s ON s.pack=m.pack WHERE s.student=? ORDER BY m.day DESC,m.id DESC""",
-            (sid,),
+            """SELECT m.* FROM movements m JOIN package_students s ON s.pack=m.pack WHERE s.student=? AND m.day<=? ORDER BY m.day DESC,m.id DESC""",
+            (sid, when),
         )
         archived_cash = many(db, """SELECT h.id,h.day,h.kind,h.pack,h.amount,h.method
                 FROM historical_cash h JOIN package_students m ON m.pack=h.pack
-                WHERE m.student=? ORDER BY h.day,h.rowid""", (sid,))
+                WHERE m.student=? AND h.day<=? ORDER BY h.day,h.rowid""", (sid, when))
         historical_lessons = many(db, """SELECT l.teacher,sum(r.units) units,
                 CASE WHEN count(r.source_value)=count(*) THEN sum(r.source_value) END source_value,
                 CASE WHEN count(f.source)=count(*) THEN sum(f.source) END source_fee
                 FROM attendance r JOIN lessons l ON l.id=r.lesson
                 LEFT JOIN fees f ON f.line=r.id AND f.status='history'
-                WHERE r.student=? AND l.active=1 AND l.history=1
-                GROUP BY l.teacher ORDER BY min(l.day),l.teacher""", (sid,))
+                WHERE r.student=? AND l.active=1 AND l.history=1 AND l.day<=?
+                GROUP BY l.teacher ORDER BY min(l.day),l.teacher""", (sid, when))
     else:
         for r in records:
             if r["teacher"] != a["teacher"]:
                 r.pop("value", None)
                 r["id"] = None
     events = (
-        many(db, "SELECT at,action,detail FROM audit WHERE ref=? ORDER BY id DESC", (sid,))
+        many(db, "SELECT at,action,detail FROM audit WHERE ref=? AND substr(at,1,10)<=? ORDER BY id DESC", (sid, when))
         if a["role"] != "teacher"
         else []
     )
@@ -255,7 +272,7 @@ def profile(db, a, p):
         else:
             event["note"] = ""
         del event["detail"]
-    return dict(student=s, packages=details, records=records, cash=cash, archived_cash=archived_cash,
+    return dict(asof=when, student=s, packages=details, records=records, cash=cash, archived_cash=archived_cash,
                 historical_lessons=historical_lessons, changes=changes, events=events)
 
 
@@ -264,7 +281,9 @@ def record(db, a, p):
     require(a["role"] != "teacher" or a["teacher"] == l["teacher"], "仅可查看本人的授课", 403)
     d = summary(db, l["id"])
     for r in d["lines"]:
-        r["name"] = get(db, "students", r["student"])["name"]
+        student = get(db, "students", r["student"])
+        r["name"] = student["name"]
+        r["main_teacher"] = get(db, "packages", r["pack"])["main_at_sale"] if r["pack"] else student["main_teacher"]
     d["payables"] = many(
         db,
         """SELECT y.*,coalesce((SELECT sum(a.amount) FROM allocations a WHERE a.payable=y.id),0) paid
@@ -295,7 +314,7 @@ def record(db, a, p):
 
 
 def ledger(db, a, p):
-    start, end = period(p)
+    start, end = period(p, db)
     tid = a["teacher"] if a["role"] == "teacher" else p.get("teacher")
     tags = [(k, p.get(k)) for k in ("type", "course") if p.get(k)]
 
@@ -313,21 +332,28 @@ def ledger(db, a, p):
         f"""SELECT l.id,l.day,l.clock,l.teacher,l.course,l.type,l.minutes,l.taught,l.history,l.change_note,l.scene,
           (SELECT group_concat(s.name,'、') FROM attendance x JOIN students s ON s.id=x.student WHERE x.lesson=l.id) students,
           (SELECT count(*) FROM attendance x WHERE x.lesson=l.id AND x.state='present') present,
-          (SELECT count(*) FROM attendance x WHERE x.lesson=l.id AND x.state='absent_charge') absent_count
-          FROM lessons l WHERE l.active=1 AND l.day BETWEEN ? AND ? AND {lesson_cond} ORDER BY l.day,l.clock""",
+          (SELECT count(*) FROM attendance x WHERE x.lesson=l.id AND x.state='absent_charge') absent_count,
+          EXISTS(SELECT 1 FROM attendance x JOIN students s ON s.id=x.student
+                 LEFT JOIN packages pk ON pk.id=x.pack WHERE x.lesson=l.id
+                 AND coalesce(pk.main_at_sale,s.main_teacher)<>l.teacher) substitute
+          FROM lessons l WHERE l.active=1 AND l.day BETWEEN ? AND ? AND {lesson_cond} ORDER BY l.day,l.clock,l.rowid""",
         (start, end, *lv),
     )
     consumption = many(
         db,
         f"""SELECT m.id,m.pack,m.day,l.day taught_day,l.id lesson,l.teacher,l.type,l.course,
-         r.student,-m.units units,-m.value amount,m.kind,m.reason FROM movements m JOIN lessons l ON m.lesson=l.id
-         JOIN attendance r ON r.id=m.line WHERE m.kind IN ('use','use_reversal') AND m.day BETWEEN ? AND ? AND {lesson_cond}
+         r.student,s.name student_name,-m.units units,-m.value amount,m.kind,m.reason FROM movements m JOIN lessons l ON m.lesson=l.id
+         JOIN attendance r ON r.id=m.line JOIN students s ON s.id=r.student WHERE m.kind IN ('use','use_reversal') AND m.day BETWEEN ? AND ? AND {lesson_cond}
          ORDER BY m.day,m.id""",
         (start, end, *lv),
     )
     fees = many(
         db,
-        f"""SELECT f.*,l.day,l.teacher,l.type,l.course FROM fees f JOIN lessons l ON l.id=f.lesson
+        f"""SELECT f.*,l.day,l.teacher,l.type,l.course,
+         (SELECT group_concat(s.name,'、') FROM attendance x JOIN students s ON x.student=s.id
+          WHERE x.lesson=l.id AND (f.line IS NULL OR f.line=x.id)) students,
+         (SELECT x.pack FROM attendance x WHERE x.id=f.line) pack
+         FROM fees f JOIN lessons l ON l.id=f.lesson
          WHERE l.active=1 AND l.day BETWEEN ? AND ? AND {lesson_cond} ORDER BY l.day,f.rowid""",
         (start, end, *lv),
     )
@@ -371,7 +397,7 @@ def ledger(db, a, p):
         pack_cond, pv = scope("p", "main_at_sale")
         out["cash"] = many(
             db,
-            f"""SELECT c.*,p.student,p.type,p.course FROM cash c JOIN packages p ON p.id=c.pack
+            f"""SELECT c.*,p.student,s.name student_name,p.type,p.course FROM cash c JOIN packages p ON p.id=c.pack JOIN students s ON s.id=p.student
              WHERE c.day BETWEEN ? AND ? AND {pack_cond} ORDER BY c.day,c.rowid""",
             (start, end, *pv),
         )
@@ -389,6 +415,20 @@ def has_col(rows, key):
     return sum(r[key] for r in rows)
 
 
+def reference_totals(fees):
+    # Booked payables and actual payments have their own dates and never enter this estimate.
+    eligible = [f for f in fees if f["status"] != "history"]
+    known = [f for f in eligible if f["calculated"] is not None]
+    pending = [f for f in known if f["status"] == "pending"]
+    return dict(
+        reference_pay=sum(f["calculated"] for f in known),
+        reference_missing=len(eligible) - len(known),
+        reference_count=len(known),
+        pending_reference=sum(f["calculated"] for f in pending),
+        pending_reference_count=len(pending),
+    )
+
+
 def report(db, a, p):
     if a["role"] == "teacher":
         p = {**p, "teacher": a["teacher"]}
@@ -397,6 +437,10 @@ def report(db, a, p):
     studied = [s for s in x["lessons"] if s["taught"]]
     stats = dict(
         scenes=len(studied),
+        substitutes=has_col(studied, "substitute"),
+        earned_entries=len(x["earnings"]),
+        payment_entries=len(x["payments"]),
+        **reference_totals(x["fees"]),
         minutes=has_col(studied, "minutes"),
         present=has_col(studied, "present"),
         absent_count=has_col(x["lessons"], "absent_count"),
@@ -417,26 +461,36 @@ def report(db, a, p):
             retained=has_col(x["retention"], "amount"),
             remaining_value=has_col(x["packages"], "remaining_value"),
             debt=has_col(x["packages"], "debt"),
+            packages=len(x["packages"]),
+            remaining=has_col(x["packages"], "remaining"),
+            registered=sum(pk["price"] for pk in x["packages"] if not pk["opening"] and pk["since"] >= start),
+            receipt_review=sum(pk["receipt_review"] or 0 for pk in x["packages"]),
         )
     tids = [t for t in teachers(db, a) if not p.get("teacher") or t["id"] == p["teacher"]]
     compare = []
     for t in tids:
         key = t["id"]
         ss = [s for s in studied if s["teacher"] == key]
+        teacher_fees = [f for f in x["fees"] if f["teacher"] == key]
+        earnings = [y for y in x["earnings"] if y["teacher"] == key]
+        payments = [v for v in x["payments"] if v["teacher"] == key]
         compare.append(
             dict(
                 id=key,
                 name=t["name"],
-                pending_fees=sum(f["teacher"] == key and f["status"] == "pending" for f in x["fees"]),
+                **reference_totals(teacher_fees),
+                pending_fees=sum(f["status"] == "pending" for f in teacher_fees),
                 pending_values=sum(r["teacher"] == key for r in x["pending_lines"]),
                 audience=t["audience"],
                 scenes=len(ss),
+                substitutes=has_col(ss, "substitute"),
                 minutes=has_col(ss, "minutes"),
                 present=has_col(ss, "present"),
                 absent_count=sum(l["absent_count"] for l in x["lessons"] if l["teacher"] == key),
                 units=sum(v["units"] for v in x["consumption"] if v["teacher"] == key),
                 value=sum(v["amount"] for v in x["consumption"] if v["teacher"] == key),
-                earned=sum(y["amount"] for y in x["earnings"] if y["teacher"] == key),
+                earned=has_col(earnings, "amount"), earned_entries=len(earnings),
+                actual_paid=has_col(payments, "amount"), payment_entries=len(payments),
             )
         )
     comp = []
@@ -490,17 +544,20 @@ def report(db, a, p):
     idle = int(cfg(db, "idle"))
     alerts = []
     alert_packs = x.get("packages") if "packages" in x else packs(db, a, {"asof": end})
-    for s in student_list(
+    roster = student_list(
         db,
         a,
         {
             "asof": end,
-            "status": "在读",
             "main_teacher": p.get("teacher"),
             "course": p.get("course"),
             "type": p.get("type"),
         },
-    ):
+    )
+    stats["students"] = len(roster)
+    for s in roster:
+        if s["status"] != "在读":
+            continue
         kinds = {k["type"] for k in alert_packs if s["id"] in k["member_ids"]}
         if not kinds and s["solo"] == s["duo"] == 0:
             alerts.append(dict(kind="low", id=s["id"], name=s["name"], text="暂无可用课时"))
@@ -559,8 +616,6 @@ def details(db, a, p):
     data = x[kind]
     if p.get("state") == "pending":
         data = [r for r in data if r.get("status") == "pending"]
-    if p.get("only") == "taught":
-        data = [r for r in data if r.get("taught")]
     if kind == "lessons" and p.get("include_versions") == "1":
         staff = a["teacher"] if a["role"] == "teacher" else p.get("teacher")
         old = many(
@@ -592,17 +647,51 @@ def details(db, a, p):
                     }
                 )
         data.sort(key=lambda r: (r["day"], r["clock"]))
+    if kind == "lessons":
+        by_id = {row["id"]: row for row in data}
+        for row in data:
+            row["participants"] = []
+        if data:
+            lines = many(db, """SELECT x.lesson,x.student,s.name,x.pack,x.units,x.status,
+                        coalesce(pk.main_at_sale,s.main_teacher) main_teacher
+                    FROM lessons l JOIN attendance x ON x.lesson=l.id
+                    JOIN students s ON s.id=x.student LEFT JOIN packages pk ON pk.id=x.pack
+                    WHERE l.day BETWEEN ? AND ? ORDER BY l.day,l.rowid,x.rowid""", (x["start"], x["end"]))
+            for line in lines:
+                lesson = by_id.get(line.pop("lesson"))
+                if lesson is not None:
+                    lesson["participants"].append(line)
+        needle = p.get("q", "").strip().casefold()
+        for row in data:
+            people = row["participants"]
+            row["students"] = "、".join(person["name"] for person in people)
+            row["substitute"] = any(person["main_teacher"] and person["main_teacher"] != row["teacher"] for person in people)
+        if needle or p.get("student") or p.get("pack") or p.get("coverage") == "substitute":
+            data = [r for r in data if any(
+                (not needle or needle in (i["name"] + " " + i["student"]).casefold())
+                and (not p.get("student") or i["student"] == p["student"])
+                and (not p.get("pack") or i["pack"] == p["pack"])
+                and (p.get("coverage") != "substitute" or (i["main_teacher"] and i["main_teacher"] != r["teacher"]))
+                for i in r["participants"])]
+    if p.get("only") == "taught":
+        data = [r for r in data if r.get("taught")]
+    if kind == "fees" and p.get("flow") == "reference":
+        data = [r for r in data if r["status"] != "history"]
     if kind == "cash" and p.get("flow") in ("receipts", "refunds"):
         data = [r for r in data if r["kind"] == ("receipt" if p["flow"] == "receipts" else "refund")]
     if kind == "packages" and p.get("flow") == "debt":
         data = [r for r in data if r["debt"] > 0]
-    if p.get("pack"):
+    if kind == "packages" and p.get("flow") == "registered":
+        data = [r for r in data if not r["opening"] and r["since"] >= x["start"]]
+    if kind == "packages" and p.get("flow") == "receipt_review":
+        data = [r for r in data if r["receipt_review"]]
+    if p.get("pack") and kind != "lessons":
         data = [
             r
             for r in data
             if r.get("pack") == p["pack"] or (kind == "packages" and r["id"] == p["pack"])
         ]
-    if p.get("student") and kind != "packages":
+    if p.get("student") and kind not in ("packages", "lessons"):
         data = [r for r in data if r.get("student") == p["student"]]
     return {"kind": kind, "rows": data, "start": x["start"], "end": x["end"]}
 
@@ -756,6 +845,9 @@ LABELS = dict(
 
 
 LABELS.update(
+    participants="逐位学员与课包",
+    substitute="代课",
+    shared_package="含共用课包",
     member_ids="课包适用学员编号",
     package_courses="课包科目",
     receipt_review="纸卡收款待核",
@@ -801,7 +893,7 @@ def export(db, a, p):
     admin(a)
     kind = p.get("kind", "lessons")
     if kind == "students":
-        data = student_list(db, a, {**p, "asof": p.get("asof") or period(p)[1]})
+        data = student_list(db, a, {**p, "asof": p.get("asof") or period(p, db)[1]})
     elif kind == "issues":
         data = []
         for r in many(
