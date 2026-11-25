@@ -17,6 +17,7 @@ export const roles = { owner: '老板管理员', ops: '运营管理员', teacher
 export const names = { HU: '胡老师', JIA: '嘉老师', PENG: '彭老师', WEN: '文老师' };
 export const statuses = {
   ok: '已确认',
+  studio: '全额归琴行',
   pending: '待核',
   history: '已含期初',
   posted: '可入账',
@@ -46,7 +47,7 @@ export const tag = (s, tone = '') => `<span class="tag ${esc(tone)}">${esc(s)}</
 export const badge = (k) =>
   tag(
     statuses[k] || k || '—',
-    ['pending', 'issue', 'revision'].includes(k) ? 'amber' : k === 'ok' || k === 'posted' ? 'green' : '',
+    ['pending', 'issue', 'revision'].includes(k) ? 'amber' : ['ok', 'posted', 'studio'].includes(k) ? 'green' : '',
   );
 export function path(page, params = {}) {
   const query = new URLSearchParams(

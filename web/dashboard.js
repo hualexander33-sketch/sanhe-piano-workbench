@@ -26,7 +26,7 @@ import {
   metricLinks,
 } from './ui.js';
 
-import { teacherComparison } from './comparison.js';
+import { studioIncomePanel, teacherComparison } from './comparison.js';
 
 let trendMode = 'scenes';
 function detailUrl(kind, extra = {}) {
@@ -130,7 +130,7 @@ pages.home = async () => {
       { flow: 'reference' },
     ) +
     (admin()
-      ? kpi('净收学费', money(s.net), '元', 'accounts', 'cash', '实收减实际退款', 'sage')
+      ? kpi('琴行总收入', money(s.studio_income), '元', 'accounts', 'studio_income', '到账学费减退款、已发课酬', 'sage')
       : kpi('累计待付款', money(s.payable), '元', 'accounts', 'payables', '截至 ' + r.end, 'sage'));
   const segments = (act, options, selected) =>
     `<div class="segments compact">${Object.entries(options)
@@ -188,7 +188,7 @@ pages.home = async () => {
   return (
     head(admin() ? '经营总览' : '我的工作台', '课量、课酬与账目按所选期间汇总', controls) +
     scopeBar(r) +
-    `<h2 class="scope-heading">所选期间</h2><div class="kpis">${cards}</div>${balancesAtDate}${teacherComparison(r, session.filter, true)}${trend}${admin() ? `<a class="retention" href="${esc(detailUrl('retention'))}"><span>${icon('chart')} 本期确认留存</span><strong>${yuan(s.retained)}</strong><small>仅含消课与课酬均已确认的记录</small>${icon('chevron')}</a>` : ''}${balances}<div class="duo-grid lower">${todo}${mix}</div>`
+    `<h2 class="scope-heading">所选期间</h2><div class="kpis">${cards}</div>${admin() ? studioIncomePanel(r,session.filter) : ''}${balancesAtDate}${teacherComparison(r, session.filter, true)}${trend}${admin() ? `<a class="retention" href="${esc(detailUrl('retention'))}"><span>${icon('chart')} 本期确认留存</span><strong>${yuan(s.retained)}</strong><small>仅含消课与课酬归属均已确认的记录</small>${icon('chevron')}</a>` : ''}${balances}<div class="duo-grid lower">${todo}${mix}</div>`
   );
 };
 actions.trend = (el) => {

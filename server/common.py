@@ -129,6 +129,11 @@ def cfg(db, key):
     return db.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()[0]
 
 
+def studio_teacher(db):
+    row = one(db, "SELECT value FROM config WHERE key='studio_income_teacher'")
+    return row["value"] if row else None
+
+
 def schema_version(db):
     if isinstance(db, sqlite3.Connection):
         return db.execute("PRAGMA user_version").fetchone()[0]

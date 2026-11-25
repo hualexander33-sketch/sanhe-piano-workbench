@@ -67,7 +67,9 @@ def period(p, db=None):
 
 
 def teachers(db, a):
-    sql = """SELECT t.*,coalesce(c.value,'') audience FROM teachers t
+    sql = """SELECT t.*,coalesce(c.value,'') audience,
+             EXISTS(SELECT 1 FROM config h WHERE h.key='studio_income_teacher' AND h.value=t.id) income_to_studio
+             FROM teachers t
              LEFT JOIN config c ON c.key='teacher_audience.' || t.id"""
     if a["role"] == "teacher":
         return many(db, sql + " WHERE t.id=?", (a["teacher"],))
@@ -397,7 +399,7 @@ def ledger(db, a, p):
         pack_cond, pv = scope("p", "main_at_sale")
         out["cash"] = many(
             db,
-            f"""SELECT c.*,p.student,s.name student_name,p.type,p.course FROM cash c JOIN packages p ON p.id=c.pack JOIN students s ON s.id=p.student
+            f"""SELECT c.*,p.student,s.name student_name,p.main_at_sale teacher,p.type,p.course FROM cash c JOIN packages p ON p.id=c.pack JOIN students s ON s.id=p.student
              WHERE c.day BETWEEN ? AND ? AND {pack_cond} ORDER BY c.day,c.rowid""",
             (start, end, *pv),
         )
@@ -408,6 +410,18 @@ def ledger(db, a, p):
             (start, end, *lv),
         )
         out["packages"] = packs(db, a, {**p, "asof": end})
+        # Historical vouchers are real dated cash flows. Opening balances carry no new cash.
+        archived = many(db, """SELECT h.id,h.day,h.kind,h.pack,h.method,h.reason,p.student,s.name student_name,
+                         coalesce(h.teacher,p.main_at_sale) teacher,p.type,p.course,
+                         CASE WHEN h.kind='receipt' THEN h.amount ELSE -h.amount END amount
+                         FROM historical_cash h LEFT JOIN packages p ON p.id=h.pack
+                         LEFT JOIN students s ON s.id=p.student WHERE h.day BETWEEN ? AND ?""", (start, end))
+        income = [{**row, "origin": "学费流水"} for row in out["cash"]]
+        income.extend({**row, "kind": "payment", "amount": -row["amount"], "origin": "课酬付款"}
+                      for row in payments)
+        income.extend({**row, "origin": "期初前收付凭证"} for row in archived
+                      if (not tid or row["teacher"] == tid) and all(row[k] == v for k, v in tags))
+        out["studio_income"] = sorted(income, key=lambda row: (row["day"], row["id"]))
     return out
 
 
@@ -417,7 +431,7 @@ def has_col(rows, key):
 
 def reference_totals(fees):
     # Booked payables and actual payments have their own dates and never enter this estimate.
-    eligible = [f for f in fees if f["status"] != "history"]
+    eligible = [f for f in fees if f["status"] not in ("history", "studio")]
     known = [f for f in eligible if f["calculated"] is not None]
     pending = [f for f in known if f["status"] == "pending"]
     return dict(
@@ -454,7 +468,14 @@ def report(db, a, p):
     )
     stats["unpaid"] = stats["earned"] - stats["paid"]
     if "cash" in x:
+        income = x["studio_income"]
+        issued = -sum(r["amount"] for r in income if r["kind"] == "payment")
         stats.update(
+            studio_income=has_col(income, "amount"),
+            income_receipts=sum(r["amount"] for r in income if r["kind"] == "receipt"),
+            income_refunds=-sum(r["amount"] for r in income if r["kind"] == "refund"),
+            income_paid=issued,
+            teaching_after_paid=stats["value"] - issued,
             receipts=sum(r["amount"] for r in x["cash"] if r["kind"] == "receipt"),
             refunds=-sum(r["amount"] for r in x["cash"] if r["kind"] == "refund"),
             net=has_col(x["cash"], "amount"),
@@ -478,6 +499,7 @@ def report(db, a, p):
             dict(
                 id=key,
                 name=t["name"],
+                income_to_studio=t["income_to_studio"],
                 **reference_totals(teacher_fees),
                 pending_fees=sum(f["status"] == "pending" for f in teacher_fees),
                 pending_values=sum(r["teacher"] == key for r in x["pending_lines"]),
@@ -614,6 +636,13 @@ def details(db, a, p):
     x = ledger(db, a, p)
     require(kind in x and isinstance(x[kind], list), "无权查询此类明细", 403)
     data = x[kind]
+    if kind == "studio_income":
+        flow = p.get("flow")
+        if flow == "teaching":
+            data = sorted([*x["consumption"], *(r for r in data if r["kind"] == "payment")],
+                          key=lambda row: (row["day"], row["id"]))
+        elif flow in ("receipt", "refund", "payment"):
+            data = [r for r in data if r["kind"] == flow]
     if p.get("state") == "pending":
         data = [r for r in data if r.get("status") == "pending"]
     if kind == "lessons" and p.get("include_versions") == "1":
@@ -676,7 +705,7 @@ def details(db, a, p):
     if p.get("only") == "taught":
         data = [r for r in data if r.get("taught")]
     if kind == "fees" and p.get("flow") == "reference":
-        data = [r for r in data if r["status"] != "history"]
+        data = [r for r in data if r["status"] not in ("studio", "history")]
     if kind == "cash" and p.get("flow") in ("receipts", "refunds"):
         data = [r for r in data if r["kind"] == ("receipt" if p["flow"] == "receipts" else "refund")]
     if kind == "packages" and p.get("flow") == "debt":
@@ -845,6 +874,7 @@ LABELS = dict(
 
 
 LABELS.update(
+    origin="流水来源",
     participants="逐位学员与课包",
     substitute="代课",
     shared_package="含共用课包",

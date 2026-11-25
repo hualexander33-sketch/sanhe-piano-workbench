@@ -44,7 +44,7 @@ import {
   closeDialog,
   toast,
 } from './ui.js';
-import { actualPay, confirmedPay, detailsPath, referencePay, teacherComparison } from './comparison.js';
+import { actualPay, confirmedPay, detailsPath, referencePay, studioIncomePanel, teacherComparison } from './comparison.js';
 
 const columnNames = {
   id: '编号',
@@ -64,6 +64,7 @@ const columnNames = {
   kind: '类型',
   amount: '金额',
   method: '方式',
+  origin: '流水来源',
   net_cash: '净收款',
   value: '消课金额',
   earned: '课酬',
@@ -132,6 +133,7 @@ const labels = {
   weekly: '周合计',
 };
 const titles = {
+  studio_income: '琴行总收入明细',
   lessons: '授课记录',
   cash: '学费流水',
   consumption: '消课记录',
@@ -146,6 +148,7 @@ const titles = {
   audit: '操作日志',
 };
 const cols = {
+  studio_income: ['day', 'kind', 'student', 'teacher', 'amount', 'pack', 'lesson', 'method'],
   cash: ['day', 'student', 'pack', 'kind', 'amount', 'method', 'reason'],
   consumption: ['day', 'taught_day', 'teacher', 'student', 'pack', 'units', 'amount', 'lesson'],
   fees: ['day', 'students', 'teacher', 'calculated', 'final', 'status', 'pack', 'lesson'],
@@ -266,12 +269,15 @@ forms['lesson-search'] = (f) => {
 pages.details = async (p) => {
   const q = { ...(p.period || p.start || p.end ? {} : session.filter), ...p, kind: p.kind || 'lessons' },
     r = await read('details', q);
-  const heading = {
+  const incomeHeadings = { receipt:'已到账学费', refund:'已退款', payment:'已发课酬', teaching:'消课收入减已发课酬' };
+  const heading = (q.kind === 'studio_income' && incomeHeadings[q.flow]) || {
     registered: '课包登记明细', receipt_review: '课包收款待核', reference: '参考课酬明细',
     receipts: '已确认到账明细', refunds:'学费退款明细'
   }[q.flow] || (q.coverage === 'substitute' ? '代课记录' : titles[q.kind]);
   const toggle = q.kind === 'lessons' ? link('details', q.coverage ? '查看全部授课' : '只看代课',
     { ...q, coverage:q.coverage ? '' : 'substitute' }, 'btn small') : '';
+  const net = q.kind === 'studio_income'
+    ? tag('合计 ' + yuan(r.rows.reduce((sum, row) => sum + row.amount, 0)), 'green') : '';
   return (
     crumb('home', '经营总览') +
     head(
@@ -282,7 +288,7 @@ pages.details = async (p) => {
     panel(
       '原始明细',
       q.kind === 'lessons' ? lessonTable(r.rows, r.end) : rowsTable(r.rows, cols[q.kind] || [], {}, r.end),
-      `<div class="actions">${tag(r.rows.length + ' 条')}${toggle}</div>`,
+      `<div class="actions">${net}${tag(r.rows.length + ' 条')}${toggle}</div>`,
     )
   );
 };
@@ -464,7 +470,9 @@ pages.teachers = async () => {
       .map((t) => {
         const info = session.meta.teachers.find((x) => x.id === t.id),
           rule = info.rules.find((x) => x.since <= r.end);
-        return `<a class="teacher-card" href="${esc(path('teacher', { ...session.filter, id: t.id }))}"><header>${avatar(t.name, t.id)}<div><h3>${esc(t.name)}</h3><small>${esc([info.subject, info.audience].filter(Boolean).join(' · ') || '授课老师')}</small></div>${icon('chevron')}</header><div class="teacher-pay"><small>本期参考课酬</small><strong>${referencePay(t)}</strong>${t.pending_fees ? tag(t.pending_fees + ' 笔待核', 'amber') : ''}</div><footer><span>${t.scenes} 节 · 其中代课 ${t.substitutes} 节</span><span>期末分成 ${rule ? rule.bp / 100 + '%' : '待核'}</span></footer></a>`;
+        const payLabel = t.income_to_studio ? '本期消课归琴行' : '本期参考课酬';
+        const shareLabel = t.income_to_studio ? '琴行 100%' : '期末分成 ' + (rule ? rule.bp / 100 + '%' : '待核');
+        return `<a class="teacher-card" href="${esc(path('teacher', { ...session.filter, id: t.id }))}"><header>${avatar(t.name, t.id)}<div><h3>${esc(t.name)}</h3><small>${esc([info.subject, info.audience].filter(Boolean).join(' · ') || '授课老师')}</small></div>${icon('chevron')}</header><div class="teacher-pay"><small>${payLabel}</small><strong>${t.income_to_studio ? yuan(t.value) : referencePay(t)}</strong>${t.pending_fees ? tag(t.pending_fees + ' 笔待核', 'amber') : ''}</div><footer><span>${t.scenes} 节 · 其中代课 ${t.substitutes} 节</span><span>${shareLabel}</span></footer></a>`;
       })
       .join('');
   return (
@@ -491,12 +499,15 @@ pages.teacher = async ({ id }) => {
       admin() ? entry('teacher_profile', '编辑档案', 'data-ref="' + esc(id) + '"') : '',
     ) +
     scopeBar(r) +
-    panel('本期课酬',metricLinks([
+    (t.income_to_studio ? panel('收入归属', metricLinks([
+      ['消课收入全额归琴行',yuan(s.value),detailsPath(q,'consumption'),'含代课，按实际授课老师归属'],
+      ['外发课酬',yuan(s.actual_paid),detailsPath(q,'payments'),'按实际付款日'],
+    ])) : panel('本期课酬',metricLinks([
       ['参考课酬',referencePay(s),detailsPath(q,'fees',{flow:'reference'}),'按逐节记录试算'],
       ['已确认应付',confirmedPay(s),!s.earned_entries && s.pending_fees ? detailsPath(q,'fees',{state:'pending'}) : detailsPath(q,'earnings'),'按应付入账日期'],
       ['实际已付',actualPay(s),detailsPath(q,'payments'),'按付款日期'],
       ['累计待付款',yuan(s.payable),detailsPath(q,'payables'),'仅含已确认应付'],
-    ])) +
+    ]))) +
     panel('期间课量', metricLinks([
       ['已上课时',s.scenes + ' 节',detailsPath(q,'lessons',{only:'taught'})],
       ['其中代课',s.substitutes + ' 节',detailsPath(q,'lessons',{only:'taught',coverage:'substitute'})],
@@ -517,7 +528,7 @@ pages.teacher = async ({ id }) => {
         ['生效日期', '教师分成', '琴行分成'],
         t.rules.map((v) => [esc(v.since), v.bp / 100 + '%', (10000 - v.bp) / 100 + '%']),
       ),
-      owner() ? entry('rule', '新增分成版本', 'data-ref="' + esc(id) + '"') : '',
+      owner() && !t.income_to_studio ? entry('rule', '新增分成版本', 'data-ref="' + esc(id) + '"') : '',
     )
   );
 };
@@ -562,6 +573,7 @@ pages.accounts = async (p) => {
       isAdmin ? entry('receipt', '记收款') + entry('settle', '老师结算', '', 'btn primary') : '',
     ) +
     scopeBar(r) +
+    (isAdmin ? studioIncomePanel(r, session.filter) : '') +
     (isAdmin ? panel('学费与课包', metricLinks([
       ['本期课包登记金额',yuan(r.stats.registered),detailsPath(session.filter,'packages',{flow:'registered'}),'按课包统计缴费日'],
       ['本期已确认到账',yuan(r.stats.receipts),detailsPath(session.filter,'cash',{flow:'receipts'}),'按收款日'],

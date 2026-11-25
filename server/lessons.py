@@ -26,6 +26,7 @@ from .common import (
     require,
     rounded,
     scaled,
+    studio_teacher,
     today,
     units,
 )
@@ -214,6 +215,7 @@ def fee_increment(db, pack, rule, qty):
 
 
 PAPER_FEE_REVIEW = "历史课酬按现行分成试算，实际约定和付款待核"
+STUDIO_INCOME = "本节消课收入全额归琴行，外发课酬为零"
 
 
 def confirmed_card_batch(db, batch):
@@ -221,6 +223,8 @@ def confirmed_card_batch(db, batch):
 
 
 def reference_fee(db, pack, rule, qty, card_batch, record, teacher, when, state):
+    if teacher == studio_teacher(db):
+        return 0
     # The reviewed workbook allocated rounding cents across individual teaching records.
     if card_batch and qty == 1000 and state == "present" and record:
         entry = one(
@@ -244,7 +248,7 @@ def post_line(db, a, lesson, p, r, history, booked, card_batch=False):
     )
     status = "pending"
     note = ""
-    bp = rule["bp"] if rule else None
+    bp = 0 if not history and p["teacher"] == studio_teacher(db) else (rule["bp"] if rule else None)
     if history:
         status, note = "history", "历史展示，已包含期初"
         if r["pack"]:
@@ -318,11 +322,14 @@ def post_payable(db, teacher, when, amount, kind, fee=None, lesson=None, related
 
 def recognize(db, a, l, fee, lines, value, when, reason):
     require(all(r["value"] is not None for r in lines), "请先补核课包与消课依据")
+    internal = l["teacher"] == studio_teacher(db)
+    require(not internal or value == 0, "该老师的授课收入全额归琴行")
     db.execute(
-        "UPDATE fees SET final=?,status='ok',reason=?,reviewer=?,reviewed=? WHERE id=?",
-        (value, reason, a["id"], now(), fee),
+        "UPDATE fees SET final=?,status=?,reason=?,reviewer=?,reviewed=? WHERE id=?",
+        (value, "studio" if internal else "ok", reason, a["id"], now(), fee),
     )
-    post_payable(db, l["teacher"], when, value, "earned", fee, l["id"], reason=reason)
+    if not internal:
+        post_payable(db, l["teacher"], when, value, "earned", fee, l["id"], reason=reason)
     db.execute(
         "INSERT INTO retention(lesson,fee,day,value,earned) VALUES (?,?,?,?,?)",
         (l["id"], fee, when, sum(r["value"] for r in lines), value),
@@ -330,6 +337,7 @@ def recognize(db, a, l, fee, lines, value, when, reason):
 
 
 def create_fees(db, a, l, rows, scope, card_batch=False):
+    internal = not l["history"] and l["teacher"] == studio_teacher(db)
     groups = [[r] for r in rows] if scope in ("student", "weekly") else [rows]
     for group in groups:
         fee = ident("F")
@@ -341,9 +349,13 @@ def create_fees(db, a, l, rows, scope, card_batch=False):
             if all(r["system_fee"] is not None for r in group)
             else None
         )
+        if internal:
+            calc = 0
         diff = source - calc if source is not None and calc is not None else None
         reason = ""
-        if card_batch:
+        if internal:
+            reason = STUDIO_INCOME
+        elif card_batch:
             reason = PAPER_FEE_REVIEW
         elif l["history"]:
             reason = "历史展示，已包含期初"
@@ -357,7 +369,7 @@ def create_fees(db, a, l, rows, scope, card_batch=False):
             reason = "缺席扣课的课酬约定待核"
         elif diff:
             reason = "原表与系统课酬存在差额"
-        status = "history" if l["history"] else "pending"
+        status = "history" if l["history"] else ("studio" if internal else "pending")
         db.execute(
             "INSERT INTO fees VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -369,14 +381,16 @@ def create_fees(db, a, l, rows, scope, card_batch=False):
                 dump(raw),
                 calc,
                 diff,
-                None,
+                0 if internal else None,
                 status,
                 reason,
                 None,
                 None,
             ),
         )
-        if not reason:
+        if internal and all(r["value"] is not None for r in group):
+            recognize(db, a, l, fee, group, 0, l["booked"], STUDIO_INCOME)
+        elif not reason:
             recognize(db, a, l, fee, group, calc, l["booked"], "按有效规则确认")
 
 
@@ -588,7 +602,7 @@ def resolve_line(db, a, p):
             value,
             reason,
             rule["id"] if rule else None,
-            rule["bp"] if rule else None,
+            0 if l["teacher"] == studio_teacher(db) else (rule["bp"] if rule else None),
             system,
             r["id"],
         ),
@@ -598,7 +612,9 @@ def resolve_line(db, a, p):
         db.execute("UPDATE arrears SET cleared=? WHERE id=?", (now(), owed["id"]))
     for f in many(
         db,
-        "SELECT * FROM fees WHERE lesson=? AND status='pending' AND (line IS NULL OR line=?)",
+        """SELECT * FROM fees WHERE lesson=? AND (line IS NULL OR line=?)
+           AND (status='pending' OR (status='studio' AND NOT EXISTS
+               (SELECT 1 FROM retention WHERE fee=fees.id)))""",
         (l["id"], r["id"]),
     ):
         rows = many(
@@ -606,6 +622,10 @@ def resolve_line(db, a, p):
             "SELECT * FROM attendance WHERE lesson=? AND (CAST(? AS TEXT) IS NULL OR id=?)",
             (l["id"], f["line"], f["line"]),
         )
+        if f["status"] == "studio":
+            if all(x["value"] is not None for x in rows):
+                recognize(db, a, l, f["id"], rows, 0, when, STUDIO_INCOME)
+            continue
         if any(x["system_fee"] is None for x in rows):
             continue
         calc = sum(x["system_fee"] for x in rows)

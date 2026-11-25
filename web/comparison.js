@@ -1,18 +1,36 @@
-import { avatar, empty, esc, link, panel, path, table, yuan } from './ui.js';
+import { avatar, empty, esc, link, metricLinks, panel, path, table, yuan } from './ui.js';
 
 export const referencePay = (row) =>
-  row.reference_missing && !row.reference_count ? '待核' : yuan(row.reference_pay);
+  row.income_to_studio ? '全额归琴行' : row.reference_missing && !row.reference_count ? '待核' : yuan(row.reference_pay);
 export const confirmedPay = (row) =>
   row.earned_entries ? yuan(row.earned) : row.pending_fees ? '待核' : '暂无确认记录';
 export const actualPay = (row) => row.payment_entries ? yuan(row.actual_paid) : '尚无付款登记';
 export const detailsPath = (scope, kind, extra = {}) => path('details', { ...scope, kind, ...extra });
+
+export function studioIncomePanel(report, scope) {
+  const s = report.stats;
+  const details = (flow) => detailsPath(scope, 'studio_income', { flow });
+  const internal = report.compare.find((teacher) => teacher.income_to_studio);
+  const also = [link('details', '消课金额减已发课酬 ' + yuan(s.teaching_after_paid),
+    { ...scope, kind:'studio_income', flow:'teaching' })];
+  if (internal) also.push(link('details', internal.name + '消课全额归琴行 ' + yuan(internal.value),
+    { ...scope, teacher:internal.id, kind:'consumption' }));
+  return panel('琴行总收入', metricLinks([
+    ['已到账学费',yuan(s.income_receipts),details('receipt')],
+    ['减去已退款',yuan(s.income_refunds),details('refund')],
+    ['减去已发课酬',yuan(s.income_paid),details('payment'),'按实际付款日'],
+  ]) + `<div class="income-foot">${also.join('<i>·</i>')}</div>`,
+    `<a class="income-total" href="${esc(details(''))}"><small>按到账计算</small><strong>${yuan(s.studio_income)}</strong></a>`, 'studio-income');
+}
 
 export function teacherComparison(report, scope, withCharts = false) {
   const teachers = [...report.compare].sort((a, b) => b.scenes - a.scenes || a.name.localeCompare(b.name, 'zh-CN'));
   const lesson = { only: 'taught' };
   const substitute = { ...lesson, coverage: 'substitute' };
   const estimate = { flow: 'reference' };
-  const drill = (row, kind, extra) => ({ ...scope, ...(row.id ? {teacher: row.id} : {}), kind, ...extra });
+  const drill = (row, kind, extra) => row.income_to_studio && kind === 'fees' && extra?.flow === 'reference'
+    ? { ...scope, teacher:row.id, kind:'consumption' }
+    : { ...scope, ...(row.id ? {teacher: row.id} : {}), kind, ...extra };
   const number = (row, label, kind, extra) => link('details', label, drill(row, kind, extra));
   const chart = (title, metric, label, kind, extra) => {
     const max = Math.max(1, ...teachers.map((row) => row[metric]));
@@ -33,8 +51,8 @@ export function teacherComparison(report, scope, withCharts = false) {
     number(row, row.minutes + ' 分钟', 'lessons', lesson),
     number(row, yuan(row.value), 'consumption'),
     number(row, referencePay(row), 'fees', estimate),
-    confirmedLink(row),
-    number(row, actualPay(row), 'payments'),
+    row.income_to_studio && !row.earned_entries ? '无需外付' : confirmedLink(row),
+    row.income_to_studio && !row.payment_entries ? '—' : number(row, actualPay(row), 'payments'),
   ]);
   const headers = ['实际老师','已上课时','其中代课','授课时长','消课金额','参考课酬','已确认应付','实际已付'];
   const mobile = lines.map((cells, i) => `<details class="teacher-summary"><summary><b>${esc(teachers[i]?.name || '合计')}</b><span>${esc((teachers[i] || report.stats).scenes)} 节</span><strong>${esc(referencePay(teachers[i] || report.stats))}</strong></summary><dl>${cells.map((cell, index) => `<div><dt>${headers[index]}</dt><dd>${cell}</dd></div>`).join('')}</dl></details>`).join('');

@@ -549,6 +549,14 @@ strong,
   font-size: 12px;
 }
 .report-note { margin: 12px 0 0; }
+.income-total, .income-foot { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.income-total { color: var(--ink); justify-content: flex-end; }
+.income-total small, .income-foot { color: var(--quiet); font-size: 12px; }
+.income-total strong { font-size: clamp(17px, 2vw, 23px); font-variant-numeric: tabular-nums; }
+.income-foot { margin-top: 12px; }
+.income-foot a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.income-foot i { font-style: normal; }
+.studio-income .balance-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .comparison-mobile { display: none; }
 .teacher-summary { border-bottom: 1px solid var(--line); }
 .teacher-summary summary {

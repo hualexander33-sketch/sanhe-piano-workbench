@@ -16,6 +16,7 @@ from .common import (
     require,
     rounded,
     scaled,
+    studio_teacher,
     today,
     units,
 )
@@ -331,6 +332,7 @@ def rule(db, a, p):
     since = day(p.get("since"))
     bp = scaled(p.get("percent"), 100, "分成百分比")
     require(bp <= 10000, "分成必须在0到100之间")
+    require(bp == 0 or teacher != studio_teacher(db), "该老师的消课收入全额归琴行，教师分成为 0%")
     rid = ident("R")
     db.execute("INSERT INTO rules VALUES (?,?,?,?)", (rid, teacher, since, bp))
     audit(db, a, "新增分成版本", rid, p)
