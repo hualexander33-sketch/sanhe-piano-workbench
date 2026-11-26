@@ -819,6 +819,27 @@ table td:has(> .num) {
   padding: 0 2px;
   border-bottom: 1px solid var(--line);
 }
+.record-with-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+}
+.record-with-action .record-card {
+  border: 0;
+}
+.record-with-action summary {
+  overflow-wrap: anywhere;
+}
+.record-action {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+}
+.record-action .btn {
+  min-height: 44px;
+}
 .record-card summary {
   display: grid;
   grid-template-columns: 1fr auto 14px;

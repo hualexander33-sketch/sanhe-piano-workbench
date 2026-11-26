@@ -257,7 +257,7 @@ export function courseMix(r, scope) {
       : empty('本期没有实授场次'),
   );
 }
-export function adaptiveTable(headers, rows, primary = [0, 1], msg) {
+export function adaptiveTable(headers, rows, primary = [0, 1], msg, actionColumn = -1) {
   if (!rows.length) return empty(msg);
   const plain = (s) => {
     const el = document.createElement('span');
@@ -271,9 +271,11 @@ export function adaptiveTable(headers, rows, primary = [0, 1], msg) {
         return `<span><b>${esc(plain(row[main]))}</b>${subtitle && subtitle !== '—' ? `<small>${esc(subtitle)}</small>` : ''}</span>`;
       };
       const fields = row
-        .map((v, i) => `<div><dt>${esc(headers[i])}</dt><dd>${v ?? '—'}</dd></div>`)
+        .map((v, i) => i === actionColumn ? '' : `<div><dt>${esc(headers[i])}</dt><dd>${v ?? '—'}</dd></div>`)
         .join('');
-      return `<details class="record-card"><summary>${line(primary[0], primary[2])}${line(primary[1], primary[3])}${icon('down')}</summary><dl>${fields}</dl></details>`;
+      const card = `<details class="record-card"><summary>${line(primary[0], primary[2])}${line(primary[1], primary[3])}${icon('down')}</summary><dl>${fields}</dl></details>`;
+      return actionColumn < 0 ? card :
+        `<div class="record-with-action">${card}<div class="record-action">${row[actionColumn]}</div></div>`;
     })
     .join('');
   return `<div class="adaptive-wide">${table(headers, rows, msg)}</div><div class="adaptive-mobile">${mobile}</div>`;

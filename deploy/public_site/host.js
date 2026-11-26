@@ -1,4 +1,4 @@
-// The presentation modules are the original workbench. Only its read transport changes on Pages.
+// The original workbench uses the shared ledger online and its published snapshot offline.
 const networkFetch = window.fetch.bind(window);
 const root = new URL('./', import.meta.url);
 const version = new URL(import.meta.url).search;

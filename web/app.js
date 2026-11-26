@@ -79,9 +79,9 @@ function loginPage() {
   session.meta = null;
   session.filter = { period: 'month' };
   window.dispatchEvent(new Event('qh-clear'));
-  document.title = '登录 · 琴行课时与经营管理系统 V1.2';
+  document.title = '登录 · 琴行课时与经营管理系统 V1.2.1';
   $('#app').innerHTML =
-    `<main class="login"><section class="login-photo" aria-label="琴房中的三角钢琴"><div class="photo-brand">${brand}<span>琴行工作台</span></div><div class="photo-title"><div class="photo-line"></div><h1>琴行课时与<br>经营管理系统</h1><p>V1.2</p></div></section><section class="login-panel"><div class="login-inner"><div class="mobile-brand">${brand} 琴行工作台</div><h2>登录工作台</h2><p class="subtext">使用琴行分配的账号，查看课时与账目。</p><form data-form="login" id="login-form">${field('username', '账号', { required: true, attrs: 'autocomplete="username" autocapitalize="none" placeholder="请输入账号"' })}${field('password', '密码', { type: 'password', required: true, attrs: 'autocomplete="current-password" placeholder="请输入密码"' })}<p id="login-error" class="form-error" role="alert"></p>${submitButton('登录', 'arrow')}</form>${session.demo ? `<div class="demo-options"><span>体验模拟账套</span><div>${btn('demo-login', '管理员体验', { id: 'demo-owner', style: 'btn small' })}${btn('demo-login', '教师体验', { id: 'demo-peng', style: 'btn small' })}</div><small>仅含虚构学生与收付记录</small></div>` : ''}</div></section></main>`;
+    `<main class="login"><section class="login-photo" aria-label="琴房中的三角钢琴"><div class="photo-brand">${brand}<span>琴行工作台</span></div><div class="photo-title"><div class="photo-line"></div><h1>琴行课时与<br>经营管理系统</h1><p>V1.2.1</p></div></section><section class="login-panel"><div class="login-inner"><div class="mobile-brand">${brand} 琴行工作台</div><h2>登录工作台</h2><p class="subtext">使用琴行分配的账号，查看课时与账目。</p><form data-form="login" id="login-form">${field('username', '账号', { required: true, attrs: 'autocomplete="username" autocapitalize="none" placeholder="请输入账号"' })}${field('password', '密码', { type: 'password', required: true, attrs: 'autocomplete="current-password" placeholder="请输入密码"' })}<p id="login-error" class="form-error" role="alert"></p>${submitButton('登录', 'arrow')}</form>${session.demo ? `<div class="demo-options"><span>体验模拟账套</span><div>${btn('demo-login', '管理员体验', { id: 'demo-owner', style: 'btn small' })}${btn('demo-login', '教师体验', { id: 'demo-peng', style: 'btn small' })}</div><small>仅含虚构学生与收付记录</small></div>` : ''}</div></section></main>`;
 }
 function shell() {
   const { account, mode } = session.meta;
@@ -95,7 +95,7 @@ function shell() {
     )
     .join('');
   $('#app').innerHTML =
-    `<div class="workspace"><aside class="sidebar"><a class="brand" href="#/home">${brand}<span><strong>三合琴行</strong><small>经营工作台</small></span></a><nav aria-label="主导航">${items}</nav><div class="side-bottom">${readOnly() || session.meta.shared_edit ? '' : '<a class="nav-item" href="#/settings" data-nav="settings">'+icon('settings')+'<span>系统设置</span></a>'}<span class="version">琴行管理系统 <b>V1.2</b></span></div></aside><div class="main-shell"><header class="topbar"><div class="breadcrumbs"><span>工作台</span>${icon('chevron')}<strong id="crumb-current">首页</strong></div><a href="#/home" class="mobile-wordmark">${brand}琴行工作台</a><div class="top-right">${mode === 'demo' ? '<span class="demo-flag"><i></i>模拟账套</span>' : ''}${stamp}${session.meta.shared_offline ? '<button class="btn small" data-act="reconnect">编辑离线 · 重连</button>' : ''}${session.meta.shared_edit?'<a class="viewer-id" href="#/review">共享编辑</a>':readOnly()?'<a class="viewer-id" href="#/review">查看待核</a>':`<button class="profile-btn" type="button" aria-label="${esc(who)} · 账号设置" data-act="account-menu">${avatar(who, account.teacher)}<span>${esc(who)} · ${esc(roles[account.role])}</span>${icon('down')}</button>`}</div></header><div id="load-status" role="status" hidden></div><main id="view" tabindex="-1"></main></div><nav class="mobile-nav" aria-label="手机导航">${items}</nav></div>`;
+    `<div class="workspace"><aside class="sidebar"><a class="brand" href="#/home">${brand}<span><strong>三合琴行</strong><small>经营工作台</small></span></a><nav aria-label="主导航">${items}</nav><div class="side-bottom">${readOnly() || session.meta.shared_edit ? '' : '<a class="nav-item" href="#/settings" data-nav="settings">'+icon('settings')+'<span>系统设置</span></a>'}<span class="version">琴行管理系统 <b>V1.2.1</b></span></div></aside><div class="main-shell"><header class="topbar"><div class="breadcrumbs"><span>工作台</span>${icon('chevron')}<strong id="crumb-current">首页</strong></div><a href="#/home" class="mobile-wordmark">${brand}琴行工作台</a><div class="top-right">${mode === 'demo' ? '<span class="demo-flag"><i></i>模拟账套</span>' : ''}${stamp}${session.meta.shared_offline ? '<button class="btn small" data-act="reconnect">编辑离线 · 重连</button>' : ''}${session.meta.shared_edit?'<a class="viewer-id" href="#/review">共享编辑</a>':readOnly()?'<a class="viewer-id" href="#/review">查看待核</a>':`<button class="profile-btn" type="button" aria-label="${esc(who)} · 账号设置" data-act="account-menu">${avatar(who, account.teacher)}<span>${esc(who)} · ${esc(roles[account.role])}</span>${icon('down')}</button>`}</div></header><div id="load-status" role="status" hidden></div><main id="view" tabindex="-1"></main></div><nav class="mobile-nav" aria-label="手机导航">${items}</nav></div>`;
 }
 async function render() {
   if (!session.meta) return;
@@ -116,7 +116,7 @@ async function render() {
   }
   const title = captions[page] || '工作台';
   $('#crumb-current').textContent = title;
-  document.title = title + ' · 琴行课时与经营管理系统 V1.2';
+  document.title = title + ' · 琴行课时与经营管理系统 V1.2.1';
   const v = $('#view');
   v.setAttribute('aria-busy', 'true');
   const indicator=document.getElementById('load-status');

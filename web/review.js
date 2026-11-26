@@ -49,11 +49,12 @@ pages.review = async p => {
     if (!list.length) note = ' · 请按实际付款凭证登记';
   }
   const unit = {students:' 人',packages:' 个课包',fees:' 笔',payments:' 笔'}[tab];
-  const content = list.length ? paginate(list,'review_'+tab,chunk=>adaptiveTable(columns,chunk.map(row))) :
+  const actionColumn = tab === 'payments' ? -1 : columns.length - 1;
+  const content = list.length ? paginate(list,'review_'+tab,chunk=>adaptiveTable(columns,chunk.map(row),[0,1],undefined,actionColumn)) :
     empty(tab === 'payments' ? '账本暂无老师付款记录' : '这项已全部核对');
   const profiles = tab === 'students' ? session.meta.teachers.filter(t=>!t.audience || t.audience==='待补充') : [];
   const teachers = profiles.length ? panel('老师档案', adaptiveTable(['老师','待补信息','修改'],
-    profiles.map(t=>[link('teacher',t.name,{id:t.id}), '授课对象', entry('teacher_profile','编辑老师档案',ref(t.id)) || link('teacher','查看',{id:t.id})]))) : '';
+    profiles.map(t=>[link('teacher',t.name,{id:t.id}), '授课对象', entry('teacher_profile','编辑老师档案',ref(t.id)) || link('teacher','查看',{id:t.id})]),[0,1],undefined,2)) : '';
   return header + panel(sections[tab], '<p class="muted">'+list.length+unit+esc(note)+'</p>'+content, tools) + teachers;
 };
 
