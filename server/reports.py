@@ -204,6 +204,10 @@ def student_list(db, a, p):
         if a["role"] != "teacher":
             info["debt"] = sum(pk["debt"] for pk in mine if pk["student"] == s["id"])
             info["receipt_review"] = sum(pk["receipt_review"] or 0 for pk in mine if pk["student"] == s["id"])
+            info["receipts_complete"] = bool(mine) and all(
+                not pk["opening"] and pk["receipt_review"] is None and pk["debt"] == 0
+                and pk["price"] > 0 and pk["net_cash"] == pk["price"] for pk in mine
+            )
         out.append(info)
     return out
 
@@ -315,6 +319,65 @@ def record(db, a, p):
     return d
 
 
+def lesson_income(db, start, end, lesson_filter, params):
+    """Attach a fee once to its first consumption, and reverse it with the same lesson."""
+    rows = many(db, f"""
+        WITH fee_groups AS (
+            SELECT f.id fee,f.line,f.lesson,l.teacher,l.course,l.type,l.day taught_day,l.booked,
+                   coalesce(f.final,f.calculated) cost,
+                   CASE WHEN f.status='studio' THEN '全额归琴行' WHEN f.final IS NOT NULL THEN '已核定'
+                        WHEN f.calculated IS NOT NULL THEN '参考课酬' ELSE '待核' END basis
+            FROM lessons l JOIN fees f ON f.lesson=l.id
+            WHERE l.history=0 AND {lesson_filter}
+        ), posted AS (
+            SELECT g.fee,m.day,m.kind,-sum(m.value) value
+            FROM movements m JOIN fee_groups g ON g.lesson=m.lesson AND (g.line IS NULL OR g.line=m.line)
+            WHERE m.kind IN ('use','use_reversal')
+            GROUP BY g.fee,m.day,m.kind
+        ), events AS (
+            SELECT * FROM posted
+            UNION ALL
+            SELECT g.fee,g.booked,'use',0 FROM fee_groups g
+            WHERE g.cost<>0 AND NOT EXISTS (SELECT 1 FROM posted p WHERE p.fee=g.fee AND p.kind='use')
+            UNION ALL
+            SELECT g.fee,y.day,'use_reversal',0 FROM payables y JOIN fee_groups g ON g.fee=y.fee
+            WHERE y.kind='correction' AND y.amount<>0
+              AND NOT EXISTS (SELECT 1 FROM posted p WHERE p.fee=g.fee AND p.kind='use_reversal')
+        ), ranked AS (
+            SELECT e.*,row_number() OVER (PARTITION BY fee,kind ORDER BY day) seq FROM events e
+        )
+        SELECT e.day,g.taught_day,g.lesson,g.fee,g.teacher,g.course,g.type,a.student,a.pack,
+               coalesce(s.name,(SELECT group_concat(st.name,'、') FROM attendance att JOIN students st
+                   ON att.student=st.id WHERE att.lesson=g.lesson)) students,
+               e.kind,e.value,CASE WHEN e.seq>1 THEN 0 WHEN e.kind='use_reversal' THEN -g.cost
+                    ELSE g.cost END teacher_fee,
+               CASE WHEN e.seq>1 THEN '已计入同节课' ELSE g.basis END fee_basis
+        FROM ranked e JOIN fee_groups g ON g.fee=e.fee
+        LEFT JOIN attendance a ON a.id=g.line LEFT JOIN students s ON s.id=a.student
+        WHERE e.day BETWEEN ? AND ? ORDER BY e.day,g.taught_day,g.lesson,g.fee,e.kind
+        """, (*params, start, end))
+    for row in rows:
+        cost = row["teacher_fee"]
+        row["amount"] = row["value"] - cost if cost is not None else None
+    return rows
+
+
+def income_totals(rows):
+    gross = sum(row["value"] for row in rows)
+    fees = sum(row["teacher_fee"] for row in rows if row["teacher_fee"] is not None)
+    # Both sides of a withdrawn estimate cancel when they fall in the same period.
+    counts = {"待核": {}, "参考课酬": {}}
+    for row in rows:
+        count = counts.get(row["fee_basis"])
+        if count is not None:
+            fee = row["fee"]
+            count[fee] = count.get(fee, 0) + (1 if row["kind"] == "use" else -1)
+    missing = sum(n != 0 for n in counts["待核"].values())
+    return dict(income_value=gross, lesson_fees=None if missing else fees,
+                studio_income=None if missing else gross - fees, income_missing=missing,
+                income_estimated=sum(n != 0 for n in counts["参考课酬"].values()))
+
+
 def ledger(db, a, p):
     start, end = period(p, db)
     tid = a["teacher"] if a["role"] == "teacher" else p.get("teacher")
@@ -421,7 +484,9 @@ def ledger(db, a, p):
                       for row in payments)
         income.extend({**row, "origin": "期初前收付凭证"} for row in archived
                       if (not tid or row["teacher"] == tid) and all(row[k] == v for k, v in tags))
-        out["studio_income"] = sorted(income, key=lambda row: (row["day"], row["id"]))
+        out["cashflow"] = sorted(income, key=lambda row: (row["day"], row["id"]))
+        if not p.get("kind") or p["kind"] == "studio_income":
+            out["studio_income"] = lesson_income(db, start, end, lesson_cond, lv)
     return out
 
 
@@ -446,7 +511,7 @@ def reference_totals(fees):
 def report(db, a, p):
     if a["role"] == "teacher":
         p = {**p, "teacher": a["teacher"]}
-    x = ledger(db, a, p)
+    x = ledger(db, a, {**p, "kind": "studio_income"})
     start, end = x["start"], x["end"]
     studied = [s for s in x["lessons"] if s["taught"]]
     stats = dict(
@@ -468,10 +533,10 @@ def report(db, a, p):
     )
     stats["unpaid"] = stats["earned"] - stats["paid"]
     if "cash" in x:
-        income = x["studio_income"]
+        income = x["cashflow"]
         issued = -sum(r["amount"] for r in income if r["kind"] == "payment")
         stats.update(
-            studio_income=has_col(income, "amount"),
+            **income_totals(x["studio_income"]),
             income_receipts=sum(r["amount"] for r in income if r["kind"] == "receipt"),
             income_refunds=-sum(r["amount"] for r in income if r["kind"] == "refund"),
             income_paid=issued,
@@ -638,11 +703,12 @@ def details(db, a, p):
     data = x[kind]
     if kind == "studio_income":
         flow = p.get("flow")
-        if flow == "teaching":
-            data = sorted([*x["consumption"], *(r for r in data if r["kind"] == "payment")],
-                          key=lambda row: (row["day"], row["id"]))
-        elif flow in ("receipt", "refund", "payment"):
-            data = [r for r in data if r["kind"] == flow]
+        if flow in ("receipt", "refund", "payment"):
+            # Old bookmarked receipt/payment drill-downs retain their original vouchers.
+            kind = "cashflow"
+            data = [r for r in x[kind] if r["kind"] == flow]
+        elif flow == "lesson_fees":
+            data = [r for r in data if r["fee_basis"] != "全额归琴行"]
     if p.get("state") == "pending":
         data = [r for r in data if r.get("status") == "pending"]
     if kind == "lessons" and p.get("include_versions") == "1":
@@ -722,7 +788,10 @@ def details(db, a, p):
         ]
     if p.get("student") and kind not in ("packages", "lessons"):
         data = [r for r in data if r.get("student") == p["student"]]
-    return {"kind": kind, "rows": data, "start": x["start"], "end": x["end"]}
+    result = {"kind": kind, "rows": data, "start": x["start"], "end": x["end"]}
+    if kind == "studio_income":
+        result["totals"] = income_totals(data)
+    return result
 
 
 def batch_info(db, a, p):
@@ -787,6 +856,7 @@ def bills(db, a, p):
 
 # Column labels and stored units are identical across detail drill-downs and exports.
 MONEY_KEYS = {
+    "teacher_fee",
     "amount",
     "earned",
     "price",
@@ -874,6 +944,9 @@ LABELS = dict(
 
 
 LABELS.update(
+    teacher_fee="扣除老师课酬",
+    fee_basis="课酬依据",
+    fee="课酬记录编号",
     origin="流水来源",
     participants="逐位学员与课包",
     substitute="代课",
@@ -881,6 +954,7 @@ LABELS.update(
     member_ids="课包适用学员编号",
     package_courses="课包科目",
     receipt_review="纸卡收款待核",
+    receipts_complete="关联课包学费已收齐",
     split_unknown="正课与赠课未分列",
     main_teacher="主带老师",
     main_at_sale="购课时主带老师",
@@ -981,11 +1055,13 @@ def export(db, a, p):
     elif kind == "audit":
         data = many(db, "SELECT * FROM audit ORDER BY id")
     else:
-        data = details(db, a, p)["rows"]
+        result = details(db, a, p)
+        kind, data = result["kind"], result["rows"]
     keys = list(dict.fromkeys(k for r in data for k in r)) or ["id"]
     f = io.StringIO(newline="")
     w = csv.writer(f)
-    w.writerow([LABELS.get(k, k) + ("（元）" if k in MONEY_KEYS else "") for k in keys])
+    labels = {**LABELS, "day": "消课入账日", "amount": "琴行收入"} if kind == "studio_income" else LABELS
+    w.writerow([labels.get(k, k) + ("（元）" if k in MONEY_KEYS else "") for k in keys])
     for r in data:
         line = []
         for k in keys:

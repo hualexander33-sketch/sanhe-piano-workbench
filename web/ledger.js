@@ -65,6 +65,8 @@ const columnNames = {
   amount: '金额',
   method: '方式',
   origin: '流水来源',
+  teacher_fee: '老师课酬',
+  fee_basis: '课酬依据',
   net_cash: '净收款',
   value: '消课金额',
   earned: '课酬',
@@ -109,7 +111,7 @@ const columnNames = {
   source_fee: '原表课酬',
 };
 const currency = new Set(
-  'amount net_cash value earned price average debt receipt_review remaining_value final source calculated difference paid unpaid contract source_value source_fee'.split(
+  'amount net_cash value earned price average debt receipt_review remaining_value final source calculated difference paid unpaid contract source_value source_fee teacher_fee'.split(
     ' ',
   ),
 );
@@ -119,6 +121,7 @@ const labels = {
   payment: '实际付款',
   opening: '期初',
   purchase: '购课',
+  contract_confirmation: '确认课包应收金额',
   use: '消课',
   use_reversal: '冲回消课',
   transfer_in: '权益转入',
@@ -134,6 +137,7 @@ const labels = {
 };
 const titles = {
   studio_income: '琴行总收入明细',
+  cashflow: '实收实付明细',
   lessons: '授课记录',
   cash: '学费流水',
   consumption: '消课记录',
@@ -148,7 +152,8 @@ const titles = {
   audit: '操作日志',
 };
 const cols = {
-  studio_income: ['day', 'kind', 'student', 'teacher', 'amount', 'pack', 'lesson', 'method'],
+  studio_income: ['day', 'students', 'teacher', 'value', 'teacher_fee', 'amount', 'fee_basis', 'pack', 'lesson'],
+  cashflow: ['day', 'kind', 'student', 'teacher', 'amount', 'pack', 'lesson', 'method'],
   cash: ['day', 'student', 'pack', 'kind', 'amount', 'method', 'reason'],
   consumption: ['day', 'taught_day', 'teacher', 'student', 'pack', 'units', 'amount', 'lesson'],
   fees: ['day', 'students', 'teacher', 'calculated', 'final', 'status', 'pack', 'lesson'],
@@ -163,6 +168,7 @@ const cols = {
 };
 function cell(row, k, asof) {
   const val = k === 'unpaid' ? row.amount - row.paid : row[k];
+  if (val == null && row.fee_basis && (k === 'teacher_fee' || k === 'amount')) return '待核';
   if (k === 'lesson') return val ? link('record', '查看', { id: val }) : '—';
   if ((k === 'pack' && val && admin()) || (k === 'id' && row.member_ids))
     return link('pack', val, { id: val, asof });
@@ -269,15 +275,18 @@ forms['lesson-search'] = (f) => {
 pages.details = async (p) => {
   const q = { ...(p.period || p.start || p.end ? {} : session.filter), ...p, kind: p.kind || 'lessons' },
     r = await read('details', q);
-  const incomeHeadings = { receipt:'已到账学费', refund:'已退款', payment:'已发课酬', teaching:'消课收入减已发课酬' };
-  const heading = (q.kind === 'studio_income' && incomeHeadings[q.flow]) || {
+  const kind = r.kind;
+  const cashHeadings = { receipt:'已到账学费', refund:'已退款', payment:'已发课酬' };
+  const heading = (kind === 'cashflow' && cashHeadings[q.flow]) || (kind === 'studio_income' && q.flow === 'lesson_fees' && '扣除的老师课酬') || {
     registered: '课包登记明细', receipt_review: '课包收款待核', reference: '参考课酬明细',
     receipts: '已确认到账明细', refunds:'学费退款明细'
-  }[q.flow] || (q.coverage === 'substitute' ? '代课记录' : titles[q.kind]);
+  }[q.flow] || (q.coverage === 'substitute' ? '代课记录' : titles[kind]);
   const toggle = q.kind === 'lessons' ? link('details', q.coverage ? '查看全部授课' : '只看代课',
     { ...q, coverage:q.coverage ? '' : 'substitute' }, 'btn small') : '';
-  const net = q.kind === 'studio_income'
-    ? tag('合计 ' + yuan(r.rows.reduce((sum, row) => sum + row.amount, 0)), 'green') : '';
+  const net = r.totals
+    ? tag('合计 ' + yuan(q.flow === 'lesson_fees' ? r.totals.lesson_fees : r.totals.studio_income),
+        r.totals.income_missing ? 'amber' : 'green') : '';
+  const labels = kind === 'studio_income' ? {day:'消课入账日',amount:'琴行收入'} : {};
   return (
     crumb('home', '经营总览') +
     head(
@@ -287,7 +296,7 @@ pages.details = async (p) => {
     ) +
     panel(
       '原始明细',
-      q.kind === 'lessons' ? lessonTable(r.rows, r.end) : rowsTable(r.rows, cols[q.kind] || [], {}, r.end),
+      kind === 'lessons' ? lessonTable(r.rows, r.end) : rowsTable(r.rows, cols[kind] || [], labels, r.end),
       `<div class="actions">${net}${tag(r.rows.length + ' 条')}${toggle}</div>`,
     )
   );
@@ -314,7 +323,7 @@ pages.students = async (p) => {
       qty(s.solo + s.duo) + ' 节' + (s.shared_package ? tag('含共用课包') : '')
         + (s.duo ? `<small class="cell-note">一对一 ${qty(s.solo)} · 一对二 ${qty(s.duo)}</small>` : ''),
       esc(s.latest || '暂无'),
-      ...(admin() ? [[s.debt ? '欠费 ' + yuan(s.debt) : '', s.receipt_review ? '待核 ' + yuan(s.receipt_review) : ''].filter(Boolean).join(' · ') || '—'] : []),
+      ...(admin() ? [[s.debt ? '欠费 ' + yuan(s.debt) : '', s.receipt_review ? '待核 ' + yuan(s.receipt_review) : ''].filter(Boolean).join(' · ') || (s.receipts_complete ? '已收齐' : '—')] : []),
       tag(s.status, 'green'),
     ]),
     '没有符合条件的学生',
@@ -346,6 +355,7 @@ function packCard(pk, asof, open = true) {
   const split = pk.split_unknown ? '正课和赠课未分列'
     : '正课 ' + qty(pk.paid_units) + ' 节 · 赠课 ' + qty(pk.gift_units) + ' 节';
   const receipt = pk.receipt_review != null ? '原收款待核 ' + yuan(pk.receipt_review)
+    : !pk.opening && pk.price > 0 && pk.net_cash === pk.price && pk.debt === 0 ? '已收齐 ' + yuan(pk.net_cash)
     : (pk.opening ? '启用后净收 ' : '累计净收 ') + yuan(pk.net_cash);
   const original = pk.opening && pk.original_price != null ? ' · 原合同 ' + yuan(pk.original_price) : '';
   const fraction = total ? Math.min(100, Math.max(0, 100 * pk.remaining / total)) : 0;
@@ -576,9 +586,9 @@ pages.accounts = async (p) => {
     (isAdmin ? studioIncomePanel(r, session.filter) : '') +
     (isAdmin ? panel('学费与课包', metricLinks([
       ['本期课包登记金额',yuan(r.stats.registered),detailsPath(session.filter,'packages',{flow:'registered'}),'按课包统计缴费日'],
-      ['本期已确认到账',yuan(r.stats.receipts),detailsPath(session.filter,'cash',{flow:'receipts'}),'按收款日'],
+      ['本期已确认到账',yuan(r.stats.receipts),detailsPath(session.filter,'cash',{flow:'receipts'}),'纸卡按确认的统计缴费日归期'],
       ['本期消课金额',yuan(r.stats.value),detailsPath(session.filter,'consumption'),'按消课流水'],
-      ['期末收款待核',yuan(r.stats.receipt_review),detailsPath(session.filter,'packages',{flow:'receipt_review'}),'原课包到账情况待核实'],
+      ['期末收款待核',yuan(r.stats.receipt_review),detailsPath(session.filter,'packages',{flow:'receipt_review'}),r.stats.receipt_review ? '原课包到账情况待核实' : '无待核收款'],
       ['本期退款',yuan(r.stats.refunds),detailsPath(session.filter,'cash',{flow:'refunds'})],
       ['期末已确认欠费',yuan(r.stats.debt),detailsPath(session.filter,'packages',{flow:'debt'})],
     ])) : '') +

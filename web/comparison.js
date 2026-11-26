@@ -9,18 +9,19 @@ export const detailsPath = (scope, kind, extra = {}) => path('details', { ...sco
 
 export function studioIncomePanel(report, scope) {
   const s = report.stats;
-  const details = (flow) => detailsPath(scope, 'studio_income', { flow });
   const internal = report.compare.find((teacher) => teacher.income_to_studio);
-  const also = [link('details', '消课金额减已发课酬 ' + yuan(s.teaching_after_paid),
-    { ...scope, kind:'studio_income', flow:'teaching' })];
-  if (internal) also.push(link('details', internal.name + '消课全额归琴行 ' + yuan(internal.value),
-    { ...scope, teacher:internal.id, kind:'consumption' }));
-  return panel('琴行总收入', metricLinks([
-    ['已到账学费',yuan(s.income_receipts),details('receipt')],
-    ['减去已退款',yuan(s.income_refunds),details('refund')],
-    ['减去已发课酬',yuan(s.income_paid),details('payment'),'按实际付款日'],
-  ]) + `<div class="income-foot">${also.join('<i>·</i>')}</div>`,
-    `<a class="income-total" href="${esc(details(''))}"><small>按到账计算</small><strong>${yuan(s.studio_income)}</strong></a>`, 'studio-income');
+  const items = [
+    ['消课金额', yuan(s.income_value), detailsPath(scope, 'consumption')],
+    ['减去老师课酬', yuan(s.lesson_fees), detailsPath(scope, 'studio_income', {flow:'lesson_fees'})],
+  ];
+  if (internal) items.push([internal.name + '消课全额归琴行', yuan(internal.value),
+    detailsPath(scope, 'consumption', {teacher:internal.id}), '已计入消课金额']);
+  const notes = [];
+  if (s.income_estimated) notes.push(s.income_estimated + ' 笔课酬暂按逐节参考金额计算');
+  if (s.income_missing) notes.push(s.income_missing + ' 笔课酬缺少金额，合计待核');
+  return panel('琴行总收入', metricLinks(items) +
+    (notes.length ? `<p class="report-note">${esc(notes.join('。'))}。</p>` : ''),
+    `<a class="income-total" href="${esc(detailsPath(scope, 'studio_income'))}"><small>消课金额 − 老师课酬</small><strong>${yuan(s.studio_income)}</strong></a>`, 'studio-income');
 }
 
 export function teacherComparison(report, scope, withCharts = false) {

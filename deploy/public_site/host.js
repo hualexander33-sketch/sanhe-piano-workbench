@@ -56,7 +56,7 @@ window.fetch = async function(input, options = {}) {
   if (stored.asof === dateInChina) {
     if (name === 'report' && Object.keys(params).every(k => k === 'period')) {
       const report = stored.reports[params.period || 'month'];
-      if (report && 'studio_income' in report.stats) return json(report);
+      if (report && 'lesson_fees' in report.stats) return json(report);
     }
     if ((name === 'students' || name === 'packages') && !Object.keys(params).length) return json(stored[name]);
   }

@@ -130,7 +130,7 @@ pages.home = async () => {
       { flow: 'reference' },
     ) +
     (admin()
-      ? kpi('琴行总收入', money(s.studio_income), '元', 'accounts', 'studio_income', '到账学费减退款、已发课酬', 'sage')
+      ? kpi('琴行总收入', money(s.studio_income), s.studio_income == null ? '' : '元', 'accounts', 'studio_income', '消课金额减去对应课时的老师课酬', 'sage')
       : kpi('累计待付款', money(s.payable), '元', 'accounts', 'payables', '截至 ' + r.end, 'sage'));
   const segments = (act, options, selected) =>
     `<div class="segments compact">${Object.entries(options)
@@ -151,7 +151,7 @@ pages.home = async () => {
   ]), `<span class="muted">截至 ${esc(r.end)}</span>`) : '';
   const numbers = admin()
     ? [
-        ['课包收款待核', yuan(s.receipt_review), '纸卡登记，等待核实到账', 'packages', { flow: 'receipt_review' }],
+        ['课包收款待核', yuan(s.receipt_review), s.receipt_review ? '纸卡登记，等待核实到账' : '无待核收款', 'packages', { flow: 'receipt_review' }],
         ['学生欠费', yuan(s.debt), '待收学费', 'packages', { flow: 'debt' }],
         ['累计老师待付款', yuan(s.payable), '已确认应付减已付', 'payables', {}],
       ]
