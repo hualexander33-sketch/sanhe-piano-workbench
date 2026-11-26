@@ -66,6 +66,11 @@ def period(p, db=None):
     return first, last
 
 
+def data_updated(db):
+    return one(db, """SELECT max(at) updated FROM audit WHERE action NOT IN
+        ('网页登录','创建网页账号','修改密码','重置密码')""")["updated"]
+
+
 def teachers(db, a):
     sql = """SELECT t.*,coalesce(c.value,'') audience,
              EXISTS(SELECT 1 FROM config h WHERE h.key='studio_income_teacher' AND h.value=t.id) income_to_studio
@@ -112,9 +117,16 @@ def packs(db, a, p):
         b = balance(db, pk["id"], when)
         spent = one(
             db,
-            "SELECT coalesce(-sum(units),0) n FROM movements WHERE pack=? AND day<=? AND kind IN ('use','use_reversal')",
+            """SELECT coalesce(-sum(units),0) n, coalesce(-sum(value),0) value FROM movements
+               WHERE pack=? AND day<=? AND kind IN ('use','use_reversal')""",
             (pk["id"], when),
-        )["n"]
+        )
+        prior_units = prior_value = 0
+        if pk["opening"] and pk["original_units"] is not None:
+            prior_units = pk["original_units"] - pk["paid_units"] - pk["gift_units"]
+            prior_value = pk["original_price"] - pk["price"]
+        used_units = spent["n"] + prior_units
+        used_value = spent["value"] + prior_value
         price, total = price_basis(db, pk)
         historical_used = one(db, """SELECT coalesce(sum(r.units),0) n FROM attendance r JOIN lessons l ON l.id=r.lesson
                                     WHERE r.pack=? AND l.active=1 AND l.history=1 AND l.day<=?""",
@@ -128,7 +140,9 @@ def packs(db, a, p):
             remaining_value=b["value"],
             net_cash=b["cash"],
             debt=b["debt"],
-            used=spent,
+            used=spent["n"],
+            progress_used=used_units, progress_total=used_units + b["units"],
+            consumed_value=used_value, portfolio_value=used_value + b["value"],
             historical_used=historical_used,
             average=rounded(price * 1000, total),
         )
@@ -149,7 +163,7 @@ def packs(db, a, p):
                     "paid_units",
                     "gift_units",
                     "used",
-                    "historical_used",
+                    "historical_used", "progress_used", "progress_total",
                     "original_units",
                     "total_units",
                     "remaining",
@@ -163,6 +177,7 @@ def packs(db, a, p):
 def student_list(db, a, p):
     when = day(p.get("asof") or today())
     packages = packs(db, a, {"asof": when})
+    low, idle = int(cfg(db, "low")) * 1000, int(cfg(db, "idle"))
     out = []
     for s in many(db, """SELECT s.* FROM students s WHERE coalesce(nullif(s.enrolled,''), (
                 SELECT min(d) FROM (
@@ -201,6 +216,25 @@ def student_list(db, a, p):
             "solo": sum(pk["remaining"] for pk in mine if pk["type"] == "solo"),
             "duo": sum(pk["remaining"] for pk in mine if pk["type"] == "duo"),
         }
+        info["progress_used"] = sum(pk["progress_used"] for pk in mine)
+        info["progress_total"] = sum(pk["progress_total"] for pk in mine)
+        needs = []
+        remainder = info["solo"] + info["duo"]
+        if s["status"] == "待确认":
+            needs.append("unknown")
+        if s["status"] == "在读":
+            if not mine or any(sum(pk["remaining"] for pk in mine if pk["type"] == typ) <= low
+                               for typ in {pk["type"] for pk in mine}):
+                needs.append("low")
+            last = r["latest"] or s["enrolled"]
+            if last and (date.fromisoformat(when) - date.fromisoformat(last)).days >= idle:
+                needs.append("idle")
+        info["follow"] = needs
+        if p.get("follow") and p["follow"] not in needs:
+            continue
+        rem = p.get("balance")
+        if (rem == "zero" and remainder != 0) or (rem == "low" and not 0 < remainder <= low) or (rem == "above" and remainder <= low):
+            continue
         if a["role"] != "teacher":
             info["debt"] = sum(pk["debt"] for pk in mine if pk["student"] == s["id"])
             info["receipt_review"] = sum(pk["receipt_review"] or 0 for pk in mine if pk["student"] == s["id"])
@@ -209,6 +243,10 @@ def student_list(db, a, p):
                 and pk["price"] > 0 and pk["net_cash"] == pk["price"] for pk in mine
             )
         out.append(info)
+    if p.get("sort") == "balance":
+        out.sort(key=lambda s: (s["solo"] + s["duo"], s["name"], s["id"]))
+    elif p.get("sort") == "latest":
+        out.sort(key=lambda s: s["latest"] or "", reverse=True)
     return out
 
 
@@ -395,6 +433,10 @@ def ledger(db, a, p):
     lessons = many(
         db,
         f"""SELECT l.id,l.day,l.clock,l.teacher,l.course,l.type,l.minutes,l.taught,l.history,l.change_note,l.scene,
+          CASE WHEN l.history=1 THEN 'history' WHEN EXISTS(SELECT 1 FROM batches b WHERE b.id=l.batch AND b.namespace LIKE '%纸卡%') THEN 'paper'
+               WHEN l.batch IS NOT NULL THEN 'import' ELSE 'manual' END origin,
+          EXISTS(SELECT 1 FROM fees f WHERE f.lesson=l.id AND f.status='pending') fee_pending,
+          EXISTS(SELECT 1 FROM attendance at WHERE at.lesson=l.id AND at.status='pending') line_pending,
           (SELECT group_concat(s.name,'、') FROM attendance x JOIN students s ON s.id=x.student WHERE x.lesson=l.id) students,
           (SELECT count(*) FROM attendance x WHERE x.lesson=l.id AND x.state='present') present,
           (SELECT count(*) FROM attendance x WHERE x.lesson=l.id AND x.state='absent_charge') absent_count,
@@ -500,12 +542,70 @@ def reference_totals(fees):
     known = [f for f in eligible if f["calculated"] is not None]
     pending = [f for f in known if f["status"] == "pending"]
     return dict(
+        verified_fees=sum(f["final"] for f in eligible if f["final"] is not None),
         reference_pay=sum(f["calculated"] for f in known),
         reference_missing=len(eligible) - len(known),
         reference_count=len(known),
         pending_reference=sum(f["calculated"] for f in pending),
         pending_reference_count=len(pending),
     )
+
+
+def comparison_period(p, start, end):
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    scale = p.get("period", "month")
+    if scale == "all" or (last - first).days > 731:
+        return None
+    prev_end = first - timedelta(days=1)
+    if p.get("start") or p.get("end") or scale in ("custom", "week"):
+        days = 7 if scale == "week" and not p.get("start") else (last - first).days + 1
+        prev_start = first - timedelta(days=days)
+    else:
+        months = {"year":12, "quarter":3, "month":1, "last_month":1}.get(scale, 1)
+        y, m = divmod(first.year * 12 + first.month - 1 - months, 12)
+        prev_start = date(y, m + 1, 1)
+    # A finished calendar period is compared to the entire previous period.
+    if scale == "week":
+        complete = last.weekday() == 6
+    elif scale in ("month", "quarter", "year", "last_month") and not p.get("start"):
+        complete = last.day == calendar.monthrange(last.year,last.month)[1] and (
+            scale not in ("quarter","year") or last.month % (3 if scale == "quarter" else 12) == 0)
+    else:
+        complete = True
+    if not complete:
+        prev_end = min(prev_end, prev_start + (last-first))
+    return prev_start.isoformat(), prev_end.isoformat()
+
+
+def comparable_activity(db, a, p, current, stats):
+    pair = comparison_period(p, current["start"], current["end"])
+    if pair is None:
+        return None
+    start,end = pair
+    previous = ledger(db,a,{**p,"start":start,"end":end,"kind":"studio_income"})
+    comparable = {}
+    def add(key, now, before, observed):
+        if observed and before > 0:
+            comparable[key] = {"previous":before, "change":(now-before)/before}
+    studied = [l for l in previous["lessons"] if l["taught"]]
+    if studied and stats["scenes"]:
+        # Exclude the month/week in which this teaching scope first appears in the ledger.
+        staff = a["teacher"] if a["role"] == "teacher" else p.get("teacher") or ""
+        earlier = one(db, """SELECT 1 recorded FROM lessons WHERE day<=? AND active=1 AND taught=1
+            AND (?='' OR teacher=?) AND (?='' OR course=?) AND (?='' OR type=?) LIMIT 1""",
+            (start,staff,staff,p.get("course") or "",p.get("course") or "",p.get("type") or "",p.get("type") or ""))
+        add("scenes",stats["scenes"],len(studied),earlier)
+        add("value",stats["value"],has_col(previous["consumption"],"amount"),earlier and current["consumption"])
+        if earlier and "studio_income" in current:
+            prev = income_totals(previous["studio_income"])
+            if prev["studio_income"] is not None and stats["studio_income"] is not None and bool(stats["income_estimated"]) == bool(prev["income_estimated"]):
+                add("studio_income",stats["studio_income"],prev["studio_income"],current["studio_income"])
+    if "cashflow" in current:
+        paid = [v for v in previous["cashflow"] if v["kind"]=="receipt"]
+        # A dated receipt in the prior window is a cash comparator only if the book covers its start.
+        inception = one(db,"SELECT min(day) first FROM (SELECT day FROM cash UNION ALL SELECT day FROM historical_cash)")["first"]
+        add("income_receipts",stats["income_receipts"],has_col(paid,"amount"),inception and inception<=start and stats["income_receipts"]>0)
+    return {"start":start,"end":end,"metrics":comparable} if comparable else None
 
 
 def report(db, a, p):
@@ -523,6 +623,7 @@ def report(db, a, p):
         minutes=has_col(studied, "minutes"),
         present=has_col(studied, "present"),
         absent_count=has_col(x["lessons"], "absent_count"),
+        used_units=has_col(x["consumption"], "units"),
         value=has_col(x["consumption"], "amount"),
         earned=has_col(x["earnings"], "amount"),
         paid=has_col(x["earnings"], "paid"),
@@ -548,11 +649,20 @@ def report(db, a, p):
             remaining_value=has_col(x["packages"], "remaining_value"),
             debt=has_col(x["packages"], "debt"),
             packages=len(x["packages"]),
+            package_used=has_col(x["packages"], "progress_used"), package_total=has_col(x["packages"], "progress_total"),
+            package_consumed=has_col(x["packages"], "consumed_value"), package_value=has_col(x["packages"], "portfolio_value"),
+            opening_limited=sum(bool(pk["opening"] and pk["original_units"] is None) for pk in x["packages"]),
             remaining=has_col(x["packages"], "remaining"),
             registered=sum(pk["price"] for pk in x["packages"] if not pk["opening"] and pk["since"] >= start),
             receipt_review=sum(pk["receipt_review"] or 0 for pk in x["packages"]),
         )
     tids = [t for t in teachers(db, a) if not p.get("teacher") or t["id"] == p["teacher"]]
+    presence = many(db, """SELECT DISTINCT l.teacher,r.student FROM lessons l JOIN attendance r ON r.lesson=l.id
+        WHERE l.active=1 AND l.taught=1 AND l.day BETWEEN ? AND ? AND r.state='present'
+          AND (?='' OR l.teacher=?) AND (?='' OR l.course=?) AND (?='' OR l.type=?)""",
+        (start, end, *(v for k in ("teacher","course","type") for v in [p.get(k) or ""]*2)))
+    stats["attending_students"] = len({v["student"] for v in presence})
+    stats["teaching_staff"] = len({v["teacher"] for v in studied})
     compare = []
     for t in tids:
         key = t["id"]
@@ -569,6 +679,9 @@ def report(db, a, p):
                 pending_fees=sum(f["status"] == "pending" for f in teacher_fees),
                 pending_values=sum(r["teacher"] == key for r in x["pending_lines"]),
                 audience=t["audience"],
+                students=len({v["student"] for v in presence if v["teacher"] == key}),
+                payable=sum(v["amount"] - v["paid"] for v in x["payables"] if v["teacher"] == key),
+                allocated=sum(v["paid"] for v in x["payables"] if v["teacher"] == key),
                 scenes=len(ss),
                 substitutes=has_col(ss, "substitute"),
                 minutes=has_col(ss, "minutes"),
@@ -615,18 +728,22 @@ def report(db, a, p):
     while cursor <= date.fromisoformat(end):
         dt = cursor.isoformat()
         bucket = dt[:7] if months else dt
-        first = buckets.setdefault(bucket, dict(label=bucket, start=dt, end=dt, scenes=0, value=0))
+        first = buckets.setdefault(bucket, dict(label=bucket, start=dt, end=dt, scenes=0, value=0, consumption_records=0))
         if "cash" in x:
-            first["net"] = 0
+            first["net"] = first["receipts"] = 0
         first["end"] = dt
         cursor += timedelta(days=1)
     for metric, rows, col in [
         ("scenes", studied, None),
         ("value", x["consumption"], "amount"),
         ("net", x.get("cash", []), "amount"),
+        ("receipts", [c for c in x.get("cashflow", []) if c["kind"] == "receipt"], "amount"),
     ]:
         for r in rows:
-            buckets[r["day"][:7] if months else r["day"]][metric] += r[col] if col else 1
+            bucket=buckets[r["day"][:7] if months else r["day"]]
+            bucket[metric] += r[col] if col else 1
+            if metric == "value":
+                bucket["consumption_records"] += 1
     low = int(cfg(db, "low"))
     idle = int(cfg(db, "idle"))
     alerts = []
@@ -642,6 +759,7 @@ def report(db, a, p):
         },
     )
     stats["students"] = len(roster)
+    stats["unverified_students"] = sum(s["status"] == "待确认" for s in roster)
     for s in roster:
         if s["status"] != "在读":
             continue
@@ -685,6 +803,7 @@ def report(db, a, p):
         composition=comp,
         alerts=alerts,
         issues=issues,
+        comparison=comparable_activity(db,a,p,x,stats),
     )
 
 
@@ -707,6 +826,11 @@ def details(db, a, p):
             # Old bookmarked receipt/payment drill-downs retain their original vouchers.
             kind = "cashflow"
             data = [r for r in x[kind] if r["kind"] == flow]
+        elif flow == "verified":
+            data = [r for r in data if r["fee_basis"] in ("已核定","全额归琴行","已计入同节课")]
+        elif flow == "net_tuition":
+            kind = "cashflow"
+            data = [r for r in x[kind] if r["kind"] in ("receipt", "refund")]
         elif flow == "lesson_fees":
             data = [r for r in data if r["fee_basis"] != "全额归琴行"]
     if p.get("state") == "pending":
@@ -747,7 +871,7 @@ def details(db, a, p):
         for row in data:
             row["participants"] = []
         if data:
-            lines = many(db, """SELECT x.lesson,x.student,s.name,x.pack,x.units,x.status,
+            lines = many(db, """SELECT x.lesson,x.student,s.name,x.pack,x.units,x.status,x.state,x.value,
                         coalesce(pk.main_at_sale,s.main_teacher) main_teacher
                     FROM lessons l JOIN attendance x ON x.lesson=l.id
                     JOIN students s ON s.id=x.student LEFT JOIN packages pk ON pk.id=x.pack
@@ -761,6 +885,14 @@ def details(db, a, p):
             people = row["participants"]
             row["students"] = "、".join(person["name"] for person in people)
             row["substitute"] = any(person["main_teacher"] and person["main_teacher"] != row["teacher"] for person in people)
+            row["review"] = ("history" if row["history"] else "pending" if row.get("line_pending") or row.get("fee_pending") else "confirmed")
+            row["origin"] = row.get("origin") or ("history" if row["history"] else "archive")
+            if not row["history"] and row.get("active", 1):
+                row["class_value"] = sum(i["value"] or 0 for i in people) if all(i["status"] != "pending" and (i["value"] is not None or not i["units"]) for i in people) else None
+            else:
+                row["class_value"] = None
+        if p.get("origin") or p.get("review"):
+            data = [r for r in data if all(not p.get(k) or r[k] == p[k] for k in ("origin","review"))]
         if needle or p.get("student") or p.get("pack") or p.get("coverage") == "substitute":
             data = [r for r in data if any(
                 (not needle or needle in (i["name"] + " " + i["student"]).casefold())
@@ -770,6 +902,8 @@ def details(db, a, p):
                 for i in r["participants"])]
     if p.get("only") == "taught":
         data = [r for r in data if r.get("taught")]
+    if kind == "fees" and p.get("flow") == "verified":
+        data = [r for r in data if r.get("final") is not None and r["status"] != "history"]
     if kind == "fees" and p.get("flow") == "reference":
         data = [r for r in data if r["status"] not in ("studio", "history")]
     if kind == "cash" and p.get("flow") in ("receipts", "refunds"):
@@ -780,6 +914,12 @@ def details(db, a, p):
         data = [r for r in data if not r["opening"] and r["since"] >= x["start"]]
     if kind == "packages" and p.get("flow") == "receipt_review":
         data = [r for r in data if r["receipt_review"]]
+    if kind == "payables" and p.get("flow") == "outstanding":
+        data = [r for r in data if r["amount"] != r["paid"]]
+    if kind == "cashflow" and p.get("flow") in ("receipt", "refund", "payment"):
+        data = [r for r in data if r["kind"] == p["flow"]]
+    if kind == "cashflow" and p.get("flow") == "net_tuition":
+        data = [r for r in data if r["kind"] in ("receipt", "refund")]
     if p.get("pack") and kind != "lessons":
         data = [
             r
@@ -789,6 +929,21 @@ def details(db, a, p):
     if p.get("student") and kind not in ("packages", "lessons"):
         data = [r for r in data if r.get("student") == p["student"]]
     result = {"kind": kind, "rows": data, "start": x["start"], "end": x["end"]}
+    if kind == "lessons" and p.get("display_page"):
+        try:
+            requested = int(p["display_page"])
+        except (TypeError, ValueError):
+            requested = 1
+        count, size = len(data), 20
+        page = max(1,min(requested,(count+size-1)//size))
+        hi = max(0,count-(page-1)*size)
+        taught = [v for v in data if v.get("active",1) and v["taught"]]
+        people = [i for v in taught for i in v["participants"] if i["state"]=="present"]
+        uses = [i for v in data if v.get("active",1) and not v["history"] for i in v["participants"]]
+        result.update(rows=data[max(0,hi-size):hi],total=count,page=page,page_size=size,
+            workload=dict(scenes=len(taught),minutes=has_col(taught,"minutes"),teachers=len({v["teacher"] for v in taught}),
+                          students=len({i["student"] for i in people}),used=sum(i["units"] for i in uses if i["status"]!="pending"),
+                          pending=sum(i["status"]=="pending" for i in uses)))
     if kind == "studio_income":
         result["totals"] = income_totals(data)
     return result
@@ -796,6 +951,27 @@ def details(db, a, p):
 
 def batch_info(db, a, p):
     admin(a)
+    if p.get("view") == "trace":
+        header=one(db,"""SELECT b.id,b.sheet,b.actor,b.created,f.name FROM batches b
+            JOIN files f ON f.id=b.file WHERE b.id=?""",(p.get("id"),))
+        require(header,"批次不存在",404)
+        conditions=["r.batch=?"]
+        args=[header["id"]]
+        if p.get("row"):
+            conditions.append("r.row_key=?")
+            args.append(p["row"])
+        if p.get("issues")=="1":
+            conditions.append("r.status IN ('issue','revision')")
+        where=" AND ".join(conditions)
+        count=one(db,f"SELECT count(*) n FROM batch_rows r WHERE {where}",args)["n"]
+        page=min(max(1,(count+19)//20), max(1,int(p.get('trace_page','1'))) if str(p.get('trace_page','1')).isdigit() and len(str(p.get('trace_page','1')))<8 else 1)
+        rows=many(db,f"""SELECT r.row_key,r.status,r.lesson,r.evidence,l.day,l.teacher FROM batch_rows r
+            LEFT JOIN lessons l ON l.id=r.lesson WHERE {where} ORDER BY r.rowid LIMIT 20 OFFSET ?""",(*args,(page-1)*20))
+        for row in rows:
+            record=json.loads(row.pop("evidence"))
+            row["note"]=record.get("message") or "；".join(map(str,record.get("errors") or []))
+        return {**header,"rows":rows,"count":count,"page":page}
+
     b = one(
         db,
         """SELECT b.*,f.name FROM batches b JOIN files f ON f.id=b.file WHERE b.id=?""",
@@ -814,7 +990,8 @@ def batch_list(db, a, p):
     admin(a)
     return many(
         db,
-        """SELECT b.id,b.created,b.actor,b.sheet,f.name,b.result IS NOT NULL confirmed
+        """SELECT b.id,b.created,b.actor,b.sheet,f.name,b.result IS NOT NULL confirmed,
+           (SELECT count(*) FROM batch_rows r WHERE r.batch=b.id AND r.status IN ('issue','revision')) issues
         FROM batches b JOIN files f ON f.id=b.file ORDER BY b.rowid DESC""",
     )
 
@@ -993,8 +1170,16 @@ LABELS.update(
 )
 
 
+MONEY_KEYS.update({"consumed_value", "portfolio_value", "class_value"})
+UNIT_KEYS.update({"progress_used", "progress_total"})
+LABELS.update(progress_used="累计已消课时", progress_total="调整后总课时",
+              consumed_value="累计消课金额", portfolio_value="课包总价值", class_value="场次消课金额",
+              review="核对状态", follow="跟进事项", fee_pending="课酬待核", line_pending="消课待核")
+
+
 def export(db, a, p):
     admin(a)
+    p = {k:v for k,v in p.items() if k != "display_page"}
     kind = p.get("kind", "lessons")
     if kind == "students":
         data = student_list(db, a, {**p, "asof": p.get("asof") or period(p, db)[1]})

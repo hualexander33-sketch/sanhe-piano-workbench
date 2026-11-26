@@ -4,13 +4,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#203d32" />
-    <title>琴行课时与经营管理系统 V1.0</title>
+    <title>琴行课时与经营管理系统 V1.1</title>
     <link rel="icon" href="/assets/mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/style.css" />
+    <link rel="stylesheet" href="/assets/workspace.css" />
     <script type="module" src="/assets/app.js"></script>
   </head>
   <body>
     <div id="app"><main class="boot">正在打开琴行工作台…</main></div>
+    <dialog id="record-drawer" aria-labelledby="drawer-title"><header class="drawer-head"><h2 id="drawer-title">授课明细</h2><button type="button" class="btn small">关闭</button></header><div class="drawer-body"></div></dialog>
     <dialog id="modal" aria-labelledby="modal-title"><div id="modal-body"></div></dialog>
     <div id="toast" role="status" aria-live="polite"></div>
     <noscript>请在浏览器中启用 JavaScript 以使用琴行管理系统。</noscript>

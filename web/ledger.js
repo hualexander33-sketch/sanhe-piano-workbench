@@ -17,7 +17,7 @@ import {
   person,
   admin,
   owner,
-  canRecord,
+  canRecord, readOnly, canManage,
   read,
   write,
   roles,
@@ -44,9 +44,11 @@ import {
   closeDialog,
   toast,
 } from './ui.js';
-import { actualPay, confirmedPay, detailsPath, referencePay, studioIncomePanel, teacherComparison } from './comparison.js';
+import { actualPay, confirmedPay, detailsPath } from './comparison.js';
 
+import {adaptiveTable, hours, packageCard, paginate, pagingLinks, rate, splitBar, teacherBars, trendPanel} from './visuals.js';
 const columnNames = {
+  progress_total:'调整后总课时', progress_used:'累计已消课时', consumed_value:'累计消课金额', portfolio_value:'课包总价值',
   id: '编号',
   day: '业务日期',
   clock: '时间',
@@ -111,7 +113,7 @@ const columnNames = {
   source_fee: '原表课酬',
 };
 const currency = new Set(
-  'amount net_cash value earned price average debt receipt_review remaining_value final source calculated difference paid unpaid contract source_value source_fee teacher_fee'.split(
+  'consumed_value portfolio_value amount net_cash value earned price average debt receipt_review remaining_value final source calculated difference paid unpaid contract source_value source_fee teacher_fee'.split(
     ' ',
   ),
 );
@@ -162,7 +164,7 @@ const cols = {
   payments: ['day', 'teacher', 'amount', 'method', 'settlement', 'lesson'],
   retention: ['day', 'teacher', 'value', 'earned', 'amount', 'lesson'],
   pending_lines: ['day', 'teacher', 'student', 'state', 'units', 'explanation', 'lesson'],
-  packages: ['student_name', 'id', 'since', 'course', 'price', 'total_units', 'used', 'remaining', 'remaining_value', 'debt', 'receipt_review'],
+  packages: ['student_name', 'id', 'since', 'course', 'price', 'progress_total', 'progress_used', 'remaining', 'consumed_value', 'remaining_value', 'debt', 'receipt_review'],
   historical_cash: ['day', 'kind', 'pack', 'teacher', 'amount', 'method', 'reason'],
   audit: ['at', 'actor', 'action', 'ref', 'detail'],
 };
@@ -180,7 +182,7 @@ function cell(row, k, asof) {
         : '待核'
       : '—';
   if (currency.has(k)) return `<span class="num">${yuan(val)}</span>`;
-  if (['units','remaining','total_units','used'].includes(k)) return qty(val);
+  if (['units','remaining','total_units','used','progress_total','progress_used'].includes(k)) return qty(val);
   if (k === 'teacher') return esc(teacher(val));
   if (k === 'type') return esc(types[val] || val);
   if (k === 'state') return esc(states[val] || val);
@@ -192,10 +194,13 @@ function cell(row, k, asof) {
   return esc(val) || '—';
 }
 export function rowsTable(rows, columns, custom = {}, asof) {
-  return table(
-    columns.map((k) => custom[k] || columnNames[k] || k),
-    rows.map((r) => columns.map((k) => cell(r, k, asof))),
-  );
+  const find=(...keys)=>keys.map(key=>columns.indexOf(key)).find(index=>index>=0);
+  const pivot=find('amount','final','remaining_value','calculated','price','value') ?? 1;
+  const subject=find('students','student','student_name','teacher','pack');
+  const state=find('status','fee_basis','state','kind','course');
+  return paginate(rows,'pg_'+columns.join('_').slice(0,24),chunk=>adaptiveTable(
+    columns.map(k=>custom[k]||columnNames[k]||k),
+    chunk.map(r=>columns.map(k=>cell(r,k,asof))),[0,pivot,subject,state]));
 }
 const exportLink = (kind, p = {}) =>
   admin()
@@ -206,43 +211,48 @@ const exportLink = (kind, p = {}) =>
       })
     : '';
 actions.export = (el) => exportCsv(Object.fromEntries(new URLSearchParams(el.dataset.query)));
-function lessonTable(rows, asof) {
-  const lines = (people, show) => people.map(show).join('<br>') || '—';
-  return table(['上课日期', '学员', '课程', '时长', '主带老师', '实际老师', '课包', '扣课（节）', '状态'],
-    [...rows].reverse().map((r) => [
-      link('record', [r.day, r.clock].filter(Boolean).join(' '), { id: r.id }),
-      lines(r.participants, (s) => admin() ? link('profile', s.name, { id: s.student, asof }) : esc(s.name)),
-      esc(r.course) + '<small class="cell-note">' + esc(types[r.type]) + '</small>',
-      r.minutes + ' 分钟',
-      lines(r.participants, (s) => esc(teacher(s.main_teacher))),
-      person(r.teacher) + (r.substitute ? tag('代课', 'olive') : ''),
-      lines(r.participants, (s) => s.pack ? (admin() ? link('pack', s.pack, { id: s.pack, asof }) : esc(s.pack)) : '—'),
-      lines(r.participants, (s) => s.status === 'pending' ? '待核' : qty(s.units)),
-      r.active === 0 ? tag('历史版本') : r.history ? tag('已含期初') : tag(r.taught ? '已实授' : '未实授', r.taught ? 'green' : ''),
-    ]), '此期间暂无符合条件的授课记录');
+function lessonTable(rows,asof) {
+  const origins={paper:'确认纸卡',import:'表格导入',history:'期初历史',manual:'手动记课',archive:'历史版本'};
+  const state=l=>l.active===0?'已更正':l.history?'已含期初':l.review==='pending'?'待核':l.taught?'已实授':'未实授';
+  const labels=['上课日期','学员','科目 / 课型','实际老师','时长','消课金额','核对 / 来源'];
+  const dated=l=>link('record',l.day+(l.clock?' '+l.clock:''),{id:l.id});
+  const detail=l=>link('record','授课明细',{id:l.id});
+  return paginate([...rows].reverse(),'class_page',chunk=>{
+    if(!chunk.length)return empty('此期间暂无符合条件的授课记录');
+    const wide=table(labels,chunk.map(l=>[dated(l),l.participants.map(i=>admin()?link('profile',i.name,{id:i.student,asof}):esc(i.name)).join('、'),esc(l.course)+'<small class="cell-note">'+esc(types[l.type])+'</small>',person(l.teacher)+(l.substitute?tag('代课','olive'):''),l.minutes+' 分钟','<span class="num">'+(l.history?'已含期初':yuan(l.class_value))+'</span>',tag(state(l),l.review==='pending'?'amber':'')+'<small class="cell-note">'+esc(origins[l.origin]||'历史版本')+'</small>']));
+    const cards=chunk.map(l=>`<details class="record-card lesson-mobile"><summary><span><b>${esc(l.students||'未登记学员')}</b><small>${esc(l.day)} · ${esc(l.course)} · ${esc(types[l.type])}</small></span><span>${esc(teacher(l.teacher))}<small>${l.history?'已含期初':yuan(l.class_value)}</small></span>${icon('down')}</summary><dl><div><dt>课型</dt><dd>${esc(types[l.type])}${l.substitute?' · 代课':''}</dd></div><div><dt>来源 / 状态</dt><dd>${esc(origins[l.origin])} · ${esc(state(l))}</dd></div><div><dt>课时明细</dt><dd>${detail(l)}</dd></div></dl></details>`).join('');
+    return `<div class="adaptive-wide">${wide}</div><div class="adaptive-mobile">${cards}</div>`;
+  });
 }
+
 const tabs = (base, items, current, p = {}) =>
   `<div class="tabs">${Object.entries(items)
     .map(([k, v]) => link(base, v, { ...p, tab: k }, k === current ? 'tab active' : 'tab'))
     .join('')}</div>`;
 export const entry = (id, name, attrs = '', style = 'btn small') =>
-  btn('entry', name, { id, style, attrs });
+  readOnly() ? '' : btn('entry', name, { id, style, attrs });
 pages.lessons = async (p) => {
   const tab = p.tab || 'lessons',
     q = { ...session.filter, kind: tab },
     more = admin()
-      ? link('batches', '导入批次', {}, 'btn', 'layers') + link('import', '导入周表', {}, 'btn', 'import')
+      ? link('batches', '导入批次', {}, 'btn', 'layers') + (canManage()?link('import', '导入周表', {}, 'btn', 'import'):'')
       : '';
-  if (tab === 'lessons') for (const key of ['q','coverage','include_versions','only']) {
+  if (tab === 'lessons') for (const key of ['q','student','pack','coverage','include_versions','only','origin','review']) {
     if (p[key]) q[key] = p[key];
   }
-  const r = await read('details', q);
+  const r = await read('details', tab==='lessons'?{...q,display_page:p.class_page||1}:q);
   const filters = tab === 'lessons' ? `<form class="search-form" data-form="lesson-search">
     ${field('q','学员',{ value:p.q, attrs:'placeholder="姓名或学生编号"' })}
     ${admin() ? field('teacher','实际老师',{ value:q.teacher, options:[['','全部老师'],...teacherOptions()] }) : ''}
     ${field('coverage','授课归属',{ value:p.coverage, options:[['','全部授课'],['substitute','只看代课']] })}
     ${field('include_versions','记录版本',{ value:p.include_versions, options:[['','有效记录'],['1','含已更正版本']] })}
+    ${field('course','科目',{value:q.course,attrs:'placeholder="全部科目"'})}${field('type','课型',{value:q.type,options:[['','全部课型'],...Object.entries(types)]})}
+    ${field('origin','来源',{value:q.origin,options:[['','全部来源'],['paper','确认纸卡'],['import','表格导入'],['manual','手动记课'],['history','期初历史']]})}
+    ${field('review','核对状态',{value:q.review,options:[['','全部状态'],['confirmed','已核定'],['pending','待核'],['history','已含期初']]})}
     ${submitButton('查询')}</form>` : '';
+  const w=r.workload;
+  const summary=w?metrics([['实授场次',w.scenes+' 场'],['授课时长',hours(w.minutes)],['学生消课',qty(w.used)+' 节'+(w.pending?' · '+w.pending+' 条待核':'')],['授课老师',w.teachers+' 人'],['到课学生',w.students+' 人']]):'';
+
   return (
     head(
       '课时记录',
@@ -255,11 +265,11 @@ pages.lessons = async (p) => {
       { lessons: '授课场次', consumption: '学生消课', fees: '课酬核对', pending_lines: '扣课待核' },
       tab, { ...session.filter, q:p.q, coverage:p.coverage, include_versions:p.include_versions },
     ) +
-    filters +
+    summary + (filters ? '<details class="filter-disclosure" '+(Object.keys(p).some(k=>['q','origin','review','coverage'].includes(k))?'open':'')+'><summary>'+icon('filter')+' 查询条件</summary>'+filters+'</details>' : '') +
     panel(
       titles[tab] || '记录',
-      tab === 'lessons' ? lessonTable(r.rows, r.end) : rowsTable(r.rows, cols[tab] || [], {}, r.end),
-      tag(r.rows.length + ' 条') + ' ' + (tab === 'lessons' && admin()
+      tab === 'lessons' ? '<div class="page-list" id="list-class_page">'+lessonTable(r.rows,r.end)+pagingLinks('class_page',r.page,r.total,r.page_size)+'</div>' : rowsTable(r.rows, cols[tab] || [], {}, r.end),
+      tag((r.total??r.rows.length) + ' 条') + ' ' + (tab === 'lessons' && admin()
         ? btn('export', '导出学生授课行', {
             glyph: 'export',
             style: 'btn small',
@@ -302,75 +312,34 @@ pages.details = async (p) => {
     )
   );
 };
-pages.students = async (p) => {
-  const items = await read('students', p);
-  const filters = `<form class="search-form" data-form="students">${p.asof ? `<input type="hidden" name="asof" value="${esc(p.asof)}">` : ''}<label class="search-box">${icon('search')}<input name="q" aria-label="搜索姓名或编号" placeholder="搜索姓名或学生编号" value="${esc(p.q)}"></label>${admin() ? field('main_teacher', '主带老师', { options: [['', '全部老师'], ...teacherOptions()], value: p.main_teacher }) : ''}${field('type', '课型', { options: [['', '全部课型'], ...Object.entries(types)], value: p.type })}${field('status', '状态', { options: [['', '全部状态'], '在读', '暂停', '结课', '待确认'], value: p.status })}${field('course', '科目', { value: p.course, attrs: 'placeholder="全部科目"' })}${submitButton('查询')}</form>`;
-  const studentName = (s) =>
-    `<a class="person person-link" href="${esc(path('profile', { id: s.id, asof:p.asof }))}">${avatar(s.name, s.main_teacher)}<span><b>${esc(s.name)}</b><small>${esc(s.id)}</small></span></a>`;
-  const wide = table(
-    [
-      '学生',
-      '主带老师',
-      '课程',
-      '剩余课时',
-      '最近上课',
-      ...(admin() ? ['收款情况'] : []),
-      '在读状态',
-    ],
-    items.map((s) => [
-      studentName(s),
-      esc(teacher(s.main_teacher)),
-      esc(s.package_courses.join("、") || s.course),
-      qty(s.solo + s.duo) + ' 节' + (s.shared_package ? tag('含共用课包') : '')
-        + (s.duo ? `<small class="cell-note">一对一 ${qty(s.solo)} · 一对二 ${qty(s.duo)}</small>` : ''),
-      esc(s.latest || '暂无'),
-      ...(admin() ? [[s.debt ? '欠费 ' + yuan(s.debt) : '', s.receipt_review ? '待核 ' + yuan(s.receipt_review) : ''].filter(Boolean).join(' · ') || (s.receipts_complete ? '已收齐' : '—')] : []),
-      tag(s.status, 'green'),
-    ]),
-    '没有符合条件的学生',
-  );
-  const mobile =
-    items
-      .map(
-        (s) =>
-          `<a class="student-card" href="${esc(path('profile', { id: s.id, asof:p.asof }))}"><div>${avatar(s.name, s.main_teacher)}<span><strong>${esc(s.name)}</strong><small>${esc(s.package_courses.join("、") || s.course)} · ${esc(teacher(s.main_teacher))}</small></span>${icon('chevron')}</div><p>余 <b>${qty(s.solo+s.duo)}</b> 节${s.shared_package ? '（含共用）' : ''}<span>最近上课 ${esc(s.latest || '暂无')}</span></p></a>`,
-      )
-      .join('') || empty('没有符合条件的学生');
-  return (
-    head(
-      '学生档案',
-      p.asof ? '课包余额与最近上课统计至 ' + p.asof : '查看主带老师、课包余额和教学记录',
-      admin() ? entry('student', '新建学生', '', 'btn primary') : '',
-    ) +
-    filters +
-    panel(
-      '学生名册',
-      `<div class="desktop-table">${wide}</div><div class="mobile-cards">${mobile}</div>`,
-      `<div class="actions">${tag(items.length + ' 人')}${exportLink('students', p)}</div>`,
-    )
-  );
+pages.students=async p=>{
+  const items=await read('students',p),when=p.asof||session.meta.today;
+  const fields=`${p.asof?`<input type="hidden" name="asof" value="${esc(p.asof)}">`:''}<label class="search-box">${icon('search')}<input name="q" aria-label="搜索姓名或编号" placeholder="搜索姓名或学生编号" value="${esc(p.q)}"></label>
+    ${admin()?field('main_teacher','主带老师',{options:[['','全部老师'],...teacherOptions()],value:p.main_teacher}):''}
+    ${field('course','科目',{value:p.course,attrs:'placeholder="全部科目"'})}${field('status','学习状态',{options:[['','全部状态'],'在读','暂停','结课','待确认'],value:p.status})}
+    ${field('balance','剩余课时',{options:[['','全部余额'],['zero','已用完'],['low',session.meta.low+' 节以内（有余额）'],['above','高于 '+session.meta.low+' 节']],value:p.balance})}
+    ${field('type','课型',{options:[['','全部课型'],...Object.entries(types)],value:p.type})}
+    ${field('follow','跟进事项',{options:[['','全部事项'],['unknown','状态待确认'],['low','低课时'],['idle','长期未上课']],value:p.follow})}
+    ${field('sort','排序',{options:[['','姓名 / 编号'],['balance','余额从少到多'],['latest','最近上课优先']],value:p.sort})}${submitButton('查询')}`;
+  const keys={low:'低课时',idle:'长期未上课',unknown:'核实状态'};
+  const paint=chunk=>{
+    const progress=s=>`<span class="balance-cell"><b>${qty(s.solo+s.duo)} 节</b><span class="mini-track"><i style="width:${rate(s.solo+s.duo,s.progress_total)||0}%"></i></span></span>`;
+    const n=s=>link('profile',s.name,{id:s.id,asof:when},'name-link');
+    const wide=table(['学生','课程 / 主带','学习状态','已消课时','剩余课时','最近上课','跟进'],chunk.map(s=>[
+      n(s)+'<small class="cell-note">'+esc(s.id)+'</small>',esc(s.package_courses.join('、')||s.course)+'<small class="cell-note">'+esc(teacher(s.main_teacher))+'</small>',
+      tag(s.status,s.status==='在读'?'green':s.status==='待确认'?'amber':''),qty(s.progress_used)+' 节'+(s.shared_package?'<small class="cell-note">含共用课包</small>':''),progress(s),esc(s.latest||'暂无'),esc(s.follow.map(k=>keys[k]).join(' · ')||'—')
+    ]),'没有符合条件的学生');
+    const cards=chunk.map(s=>`<a class="student-card" href="${esc(path('profile',{id:s.id,asof:when}))}"><div>${avatar(s.name,s.main_teacher)}<span><strong>${esc(s.name)}</strong><small>${esc(teacher(s.main_teacher))} · ${esc(s.package_courses.join('、')||s.course)}</small></span>${icon('chevron')}</div><p>剩余 <b>${qty(s.solo+s.duo)}</b> 节<span>最近 ${esc(s.latest||'暂无记录')}</span></p></a>`).join('')||empty('没有符合条件的学生');
+    return '<div class="adaptive-wide">'+wide+'</div><div class="adaptive-mobile">'+cards+'</div>';
+  };
+  const filtered=['q','main_teacher','course','status','balance','type','follow','sort'].filter(k=>p[k]).length;
+  return head('学生档案','截至 '+when,canManage()?entry('student','新建学生','','btn primary'):'')+
+    `<details class="filter-disclosure"${filtered?' open':''}><summary>${icon('filter')} 搜索与筛选${filtered?' · '+filtered+' 项':''}</summary><form data-form="students" class="search-form">${fields}</form></details>`+
+    panel('学生名册',paginate(items,'student_page',paint),`<div class="actions">${tag(items.length+' 人')}${exportLink('students',p)}</div>`);
 };
+
 forms.students = (f) => go('students', values(f));
-function packCard(pk, asof, open = true) {
-  const total = pk.total_units;
-  const split = pk.split_unknown ? '正课和赠课未分列'
-    : '正课 ' + qty(pk.paid_units) + ' 节 · 赠课 ' + qty(pk.gift_units) + ' 节';
-  const receipt = pk.receipt_review != null ? '原收款待核 ' + yuan(pk.receipt_review)
-    : !pk.opening && pk.price > 0 && pk.net_cash === pk.price && pk.debt === 0 ? '已收齐 ' + yuan(pk.net_cash)
-    : (pk.opening ? '启用后净收 ' : '累计净收 ') + yuan(pk.net_cash);
-  const original = pk.opening && pk.original_price != null ? ' · 原合同 ' + yuan(pk.original_price) : '';
-  const fraction = total ? Math.min(100, Math.max(0, 100 * pk.remaining / total)) : 0;
-  const members = pk.member_ids.length > 1 ? `<p>共用学员 · ${esc(pk.student_name)}</p>` : '';
-  const finances = admin() ? `<p>${pk.opening ? '期初余值' : '登记金额'} ${yuan(pk.price)}${original} · 均价 ${yuan(pk.average)}<br>${receipt}${pk.debt ? ' · 已确认欠费 ' + yuan(pk.debt) : ''}<br>剩余价值 ${yuan(pk.remaining_value)}</p>` : '';
-  return `<article class="pack"><div class="pack-top"><span class="tile-icon">${icon('book')}</span><div>
-    <h3>${esc(pk.course)} · ${esc(types[pk.type])}</h3><small>${esc(pk.id)}</small></div></div>
-    <div class="pack-number"><strong>${qty(pk.remaining)}</strong> 节剩余 <small>${pk.opening ? '启用后已用' : '已用'} ${qty(pk.used)} 节</small></div>
-    <div class="track"><i style="width:${fraction}%"></i></div>
-    <p>课包共 ${qty(total)} 节 · ${split}</p>${members}${finances}
-    ${pk.opening ? `<p>期初前已登记扣课 ${qty(pk.historical_used)} 节</p>` : ''}
-    <p>${pk.opening ? '期初截至' : '统计缴费日'} ${esc(pk.since)}${pk.until_day ? ' · 到期 ' + esc(pk.until_day) : ''}</p>
-    ${open ? link('pack','课包明细',{id:pk.id,asof}) : ''}</article>`;
-}
+const packCard = packageCard;
 pages.pack = async ({ id, asof = session.meta.today }) => {
   const [pk] = await read('packages', { pack:id, asof });
   if (!pk) throw Error('所选日期没有此课包');
@@ -387,10 +356,13 @@ pages.pack = async ({ id, asof = session.meta.today }) => {
 pages.profile = async ({ id, asof }) => {
   const d = await read('profile', { id, asof }), s = d.student;
   const raw = 'data-ref="' + esc(s.id) + '"';
-  const packages = d.packages.map(pk => packCard(pk, d.asof)).join('');
-  const rec = table(
+  const packGroup=(list)=>list.length?'<div class="packs">'+list.map(pk=>packCard(pk,d.asof)).join('')+'</div>':empty('暂无课包');
+  const current=d.packages.filter(pk=>pk.remaining>0), history=d.packages.filter(pk=>pk.remaining<=0);
+  const notes=d.records.filter(r=>r.content||r.next_focus);
+  const packages=packGroup(current);
+  const rec = paginate(d.records,'profile_page',chunk=>adaptiveTable(
     ['上课日期', '课程', '时长', '主带老师', '实际老师', '出勤', '扣课（节）', '课包', '消课金额', '本节内容 / 下次重点'],
-    d.records.map((r) => [
+    chunk.map((r) => [
       r.id ? link('record', r.day + ' ' + r.clock, { id: r.id }) : esc(r.day + ' ' + r.clock),
       esc(r.course),
       r.minutes + ' 分钟',
@@ -401,8 +373,7 @@ pages.profile = async ({ id, asof }) => {
       r.pack && admin() ? link('pack', r.pack, {id:r.pack,asof:d.asof}) : esc(r.pack || '待核'),
       r.history ? '已含期初' : 'value' in r ? yuan(r.value) : '—',
       esc([r.content, r.next_focus].filter(Boolean).join(' / ') || '—'),
-    ]),
-  );
+    ]),[0,4]));
   const packageLeads = new Map(d.packages.map((pk) => [pk.id, pk.main_at_sale]));
   const leads = [...new Set(d.packages.filter((pk) => pk.main_at_sale).map((pk) => pk.course + ' · ' + teacher(pk.main_at_sale)))];
   const substitutes = [...new Set(d.records.filter((r) => packageLeads.get(r.pack) && packageLeads.get(r.pack) !== r.teacher).map((r) => teacher(r.teacher)))];
@@ -457,11 +428,10 @@ pages.profile = async ({ id, asof }) => {
       ]),
     ) +
     panel(
-      '课包与缴费',
-      (packages ? `<div class="packs">${packages}</div>` : empty('尚未建立课包')) +
-        (admin() ? billingHistory : ''),
+      '当前课包', packages,
       admin() ? entry('opening', '登记期初课包', raw) : '',
     ) +
+    (history.length ? panel('历史课包',packGroup(history),tag(history.length+' 个')) : '') +
     panel(
       '上课记录',
       rec,
@@ -472,33 +442,30 @@ pages.profile = async ({ id, asof }) => {
           start: d.records.at(-1)?.day || s.enrolled || session.meta.activation,
           end: d.records[0]?.day || session.meta.today,
         }),
-    )
+    ) + (admin()?panel('缴费与退款',billingHistory):'') +
+    panel('教学与跟进', (s.note?'<p class="profile-note">'+esc(s.note)+'</p>':'')+
+      (notes.length?paginate(notes,'note_page',items=>adaptiveTable(['日期','授课老师','本节内容','下次重点'],items.map(r=>[esc(r.day),esc(teacher(r.teacher)),esc(r.content||'—'),esc(r.next_focus||'—')]))):s.note?'':empty('尚无教学备注或跟进记录')))
   );
 };
 pages.teachers = async () => {
-  const r = await read('report', session.filter),
-    cards = r.compare
-      .map((t) => {
-        const info = session.meta.teachers.find((x) => x.id === t.id),
-          rule = info.rules.find((x) => x.since <= r.end);
-        const shareLabel = '分成 ' + (rule ? rule.bp / 100 + '%' : '待核');
-        return `<a class="teacher-card" href="${esc(path('teacher', { ...session.filter, id: t.id }))}"><header>${avatar(t.name, t.id)}<div><h3>${esc(t.name)}</h3><small>${esc([info.subject, info.audience].filter(Boolean).join(' · ') || '授课老师')}</small></div>${icon('chevron')}</header><div class="teacher-pay"><small>参考课酬</small><strong>${referencePay(t)}</strong>${t.pending_fees ? tag(t.pending_fees + ' 笔待核', 'amber') : ''}</div><footer><span>${t.scenes} 节${t.substitutes ? ' · 代课 ' + t.substitutes + ' 节' : ''}</span><span>${shareLabel}</span></footer></a>`;
-      })
-      .join('');
-  return (
-    head(admin() ? '老师收入' : '我的收入') +
-    scopeBar(r) +
-    `<div class="teacher-grid">${cards}</div>` +
-    teacherComparison(r, session.filter)
-  );
+  const q=session.filter,r=await read('report',q);
+  const tiles=r.compare.map(t=>{
+    const info=session.meta.teachers.find(v=>v.id===t.id);
+    const metrics=[['授课',t.scenes+' 场'],['时长',hours(t.minutes)],['上课学员',t.students+' 人'],['消课金额',yuan(t.value)],['已确认课酬',yuan(t.verified_fees)],['待核参考',t.pending_fees>t.pending_reference_count?'待核':yuan(t.pending_reference)],['本期已付',t.payment_entries?yuan(t.actual_paid):'暂无付款记录'],['期末待付',yuan(t.payable)]];
+    return `<a class="staff-tile" href="${esc(path('teacher',{...q,id:t.id}))}"><header>${avatar(t.name,t.id)}<span><b>${esc(t.name)}</b><small>${esc(info.subject||'未登记科目')}</small></span>${icon('chevron')}</header><dl>${metrics.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></a>`;
+  }).join('');
+  return head(admin()?'老师管理':'我的收入','',owner()?link('settings','分成设置',{},'btn','settings'):'')+scopeBar(r)+
+    `<div class="analytics-pair">${teacherBars(r,q)}${trendPanel(r,q,'teacher')}</div>`+
+    panel('老师名册',`<div class="staff-grid">${tiles||empty()}</div>`,tag(r.compare.length+' 人'));
 };
+
 pages.teacher = async ({ id }) => {
   const t = session.meta.teachers.find((v) => v.id === id);
   if (!t) throw Error('当前账号无法查看此老师');
   const q = { ...session.filter, teacher: id };
-  const [r, fees, classes] = await Promise.all([
+  const [r, fees, classes, bills] = await Promise.all([
     read('report', q), read('details', { ...q, kind: 'fees' }),
-    read('details', { ...q, kind:'lessons', only:'taught' }),
+    read('details', { ...q, kind:'lessons', only:'taught' }), read('bills',{teacher:id}),
   ]);
   const s = r.stats;
   return (
@@ -510,7 +477,8 @@ pages.teacher = async ({ id }) => {
     ) +
     scopeBar(r) +
     panel('本期课酬',metricLinks([
-      ['参考课酬',referencePay(s),detailsPath(q,'fees',{flow:'reference'})],
+      ['本期已确认课酬',yuan(s.verified_fees),detailsPath(q,'fees',{flow:'verified'})],
+      ['待核参考课酬',s.pending_fees>s.pending_reference_count?'待核':yuan(s.pending_reference),detailsPath(q,'fees',{state:'pending'})],
       ['已确认应付',confirmedPay(s),!s.earned_entries && s.pending_fees ? detailsPath(q,'fees',{state:'pending'}) : detailsPath(q,'earnings')],
       ['实际已付',actualPay(s),detailsPath(q,'payments')],
       ['累计待付款',yuan(s.payable),detailsPath(q,'payables')],
@@ -521,7 +489,13 @@ pages.teacher = async ({ id }) => {
       ['授课时长',s.minutes + ' 分钟',detailsPath(q,'lessons',{only:'taught'})],
       ['消课金额',yuan(s.value),detailsPath(q,'consumption')],
     ])) +
+    `<div class="analytics-pair">${trendPanel(r,q,'teacher')}${panel('到课学员分布',Object.entries(classes.rows.reduce((groups,l)=>{
+      const set=groups[l.course]||=new Set(); for(const i of l.participants)if(i.state==='present')set.add(i.student);return groups;
+    },{})).map(([course,ids])=>link('lessons',course+' · '+ids.size+' 人',{...q,course},'distribution-row')).join('')||empty('暂无到课学员'),tag(s.attending_students+' 位学员'))}</div>`+
+    panel('代课记录',lessonTable(classes.rows.filter(l=>l.substitute),r.end),tag(s.substitutes+' 场'))+
     panel('上课记录',lessonTable(classes.rows,r.end),tag(classes.rows.length + ' 条')) +
+    panel('结算记录',adaptiveTable(['确认日期','授课期间','结算金额'],bills.filter(b=>b.teacher===id&&b.day>=r.start&&b.day<=r.end).map(b=>[esc(b.day),esc(b.start+' 至 '+b.end),btn('bill',yuan(b.snapshot.total),{id:b.id,style:'text-button'})]),[0,2])) +
+
     panel('逐节课酬', rowsTable(fees.rows,cols.fees,{},r.end),exportLink('fees',q)) +
     panel(
       '实际付款与分配',
@@ -561,7 +535,7 @@ pages.accounts = async (p) => {
   const bills = tab === 'bills' ? rows.filter((b) => b.day >= r.start && b.day <= r.end) : [];
   const data =
     tab === 'bills'
-      ? table(
+      ? adaptiveTable(
           ['确认日期', '老师', '授课期间', '已结算金额', '待核未纳入', '明细'],
           bills.map((b) => [
             esc(b.day),
@@ -580,23 +554,32 @@ pages.accounts = async (p) => {
       isAdmin ? entry('receipt', '记收款') + entry('settle', '老师结算', '', 'btn primary') : '',
     ) +
     scopeBar(r) +
-    (isAdmin ? studioIncomePanel(r, session.filter) : '') +
-    (isAdmin ? panel('学费与课包', metricLinks([
-      ['本期课包登记金额',yuan(r.stats.registered),detailsPath(session.filter,'packages',{flow:'registered'})],
-      ['本期已确认到账',yuan(r.stats.receipts),detailsPath(session.filter,'cash',{flow:'receipts'}),'纸卡按统计缴费日'],
-      ['期末收款待核',yuan(r.stats.receipt_review),detailsPath(session.filter,'packages',{flow:'receipt_review'})],
-      ['本期退款',yuan(r.stats.refunds),detailsPath(session.filter,'cash',{flow:'refunds'})],
-      ['期末已确认欠费',yuan(r.stats.debt),detailsPath(session.filter,'packages',{flow:'debt'})],
-    ])) : '') +
-    panel('老师课酬与付款',metricLinks([
-      ['本期待核课酬',r.stats.pending_fees && !r.stats.pending_reference_count ? '待核' : yuan(r.stats.pending_reference),detailsPath(session.filter,'fees',{state:'pending'}),r.stats.pending_fees ? r.stats.pending_fees + ' 笔待核' : ''],
-      ['本期已确认应付',confirmedPay(r.stats),!r.stats.earned_entries && r.stats.pending_fees ? detailsPath(session.filter,'fees',{state:'pending'}) : detailsPath(session.filter,'earnings')],
-      ['本期实际已付',actualPay(r.stats),detailsPath(session.filter,'payments')],
-      ['期末待付款',yuan(r.stats.payable),detailsPath(session.filter,'payables')],
+    (isAdmin ? `<div class="finance-bands">${panel('现金收支',metricLinks([
+      ['实际学费收款',yuan(r.stats.income_receipts),detailsPath(session.filter,'cashflow',{flow:'receipt'})],
+      ['学费退款',yuan(r.stats.income_refunds),detailsPath(session.filter,'cashflow',{flow:'refund'})],
+      ['净收学费',yuan(r.stats.income_receipts-r.stats.income_refunds),detailsPath(session.filter,'cashflow',{flow:'net_tuition'})],
+      ['实际支付课酬',r.stats.payment_entries||r.stats.income_paid?yuan(r.stats.income_paid):'暂无付款记录',detailsPath(session.filter,'cashflow',{flow:'payment'})],
+    ]))}${panel('消课与留存',metricLinks([
+      ['消课金额',yuan(r.stats.value),detailsPath(session.filter,'consumption')],
+      ['已核部分留存',yuan(r.stats.retained),detailsPath(session.filter,'retention')],
+      [r.stats.income_estimated?'参考课酬后留存':'课酬后留存',yuan(r.stats.studio_income),detailsPath(session.filter,'studio_income'),r.stats.income_estimated?'含 '+r.stats.income_estimated+' 笔待核':''],
+      ['期末课包剩余价值',yuan(r.stats.remaining_value),detailsPath(session.filter,'packages')],
+    ]))}</div>` : '') +
+    panel('老师课酬',metricLinks([
+      ['本期已确认课酬',yuan(r.stats.verified_fees),detailsPath(session.filter,'fees',{flow:'verified'})],
+      ['待核参考课酬',r.stats.pending_fees>r.stats.pending_reference_count?'待核':yuan(r.stats.pending_reference),detailsPath(session.filter,'fees',{state:'pending'}),r.stats.pending_fees+' 笔'],
+      ['本期新增应付',yuan(r.stats.earned),detailsPath(session.filter,'earnings')],
+      ['期末累计待付',yuan(r.stats.payable),detailsPath(session.filter,'payables',{flow:'outstanding'})],
     ])) +
+    (isAdmin?`<div class="analytics-pair">${trendPanel(r,session.filter,'finance')}${panel('消课金额分配',r.stats.lesson_fees!=null&&r.stats.studio_income!=null&&r.stats.income_value>0&&r.stats.lesson_fees>=0&&r.stats.studio_income>=0?splitBar('消课总额',r.stats.lesson_fees,r.stats.studio_income,yuan,['老师课酬',r.stats.income_estimated?'参考留存':'琴行留存'],detailsPath(session.filter,'studio_income')):empty(r.stats.income_missing?'部分课酬金额待核':'本期无可分段的正向消课金额'))}</div>`:'')+
+    panel('老师付款进度',r.compare.map(t=>{
+      const total=t.allocated+t.payable, frac=rate(t.allocated,total);
+      return `<a class="pay-progress" href="${esc(detailsPath({...session.filter,teacher:t.id},'payables'))}"><b>${esc(t.name)}</b><div class="mini-track"><i style="width:${frac||0}%"></i></div><span>${total?'已付 '+yuan(t.allocated)+' / 应付 '+yuan(total):'暂无已确认应付'}</span></a>`;
+    }).join('')||empty(),`<span class="asof">截至 ${esc(r.end)}</span>`) +
+
     tabs('accounts', opt, tab, session.filter) +
     panel(opt[tab], data, tab === 'bills' ? '' : exportLink(tab, q)) +
-    (isAdmin
+    (canManage()
       ? panel(
           '登记收付',
           `<div class="action-list">${[
@@ -660,10 +643,10 @@ pages.record = async ({ id }) => {
       : '—',
   ]);
   const controls =
-    admin() && d.active
+    canManage() && d.active
       ? link('manual', '更正场次', { correct: id }, 'btn', 'book') +
         entry('correct', '关联冲回', 'data-ref="' + esc(id) + '"')
-      : !admin() && d.active
+      : !admin() && !readOnly() && d.active
         ? entry('request_change', '申请更正', 'data-ref="' + esc(id) + '"')
         : '';
   return (
@@ -681,14 +664,14 @@ pages.record = async ({ id }) => {
     ) +
     panel(
       '出勤与扣课',
-      table(
+      adaptiveTable(
         ['学生', '对应课包', '主带老师', '出勤', '扣课次数', '消课金额', '教师分成', '状态', '教学记录', '操作'],
         rows,
       ),
     ) +
     panel(
       '课酬核对',
-      table(['口径', '原表金额', '参考课酬', '差额', '最终确认', '状态', '原因', '确认人', '操作'], fs),
+      adaptiveTable(['口径', '原表金额', '参考课酬', '差额', '最终确认', '状态', '原因', '确认人', '操作'], fs),
     ) +
     panel(
       '应付款与实际分配',
@@ -697,7 +680,7 @@ pages.record = async ({ id }) => {
     ) +
     panel(
       '记录追溯',
-      `<div class="evidence">${d.history ? '<p>历史展示，已包含期初。</p>' : ''}${d.batch ? link('import', '查看原始导入批次', { batch: d.batch }) : '<p>来源为手动记课。</p>'}${(d.evidence || []).map((x) => `<p>来源行 ${esc(x.row_key)} · ${esc(x.status)}</p>`).join('')}${d.versions.map((v) => `<p>${link('record', v.id, { id: v.id })} · ${v.active ? '现行版本' : '原始版本'} ${esc(v.change_note)}</p>`).join('')}${d.dependencies ? `<p>后续权益变动 ${d.dependencies.movements?.length || 0} 条 · 已结算 ${d.dependencies.settled?.length || 0} 笔 · 已付款 ${d.dependencies.payments?.length || 0} 笔</p>` : ''}</div>`,
+      `<div class="evidence">${d.history ? '<p>历史展示，已包含期初。</p>' : ''}${d.batch ? link('import', '查看原始导入批次', { batch: d.batch, row:readOnly()?d.evidence?.[0]?.row_key:undefined }) : '<p>来源为手动记课。</p>'}${(d.evidence || []).map((x) => `<p>来源行 ${esc(x.row_key)} · ${esc(x.status)}</p>`).join('')}${d.versions.map((v) => `<p>${link('record', v.id, { id: v.id })} · ${v.active ? '现行版本' : '原始版本'} ${esc(v.change_note)}</p>`).join('')}${d.dependencies ? `<p>后续权益变动 ${d.dependencies.movements?.length || 0} 条 · 已结算 ${d.dependencies.settled?.length || 0} 笔 · 已付款 ${d.dependencies.payments?.length || 0} 笔</p>` : ''}</div>`,
     )
   );
 };

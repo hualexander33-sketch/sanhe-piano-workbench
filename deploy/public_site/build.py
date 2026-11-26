@@ -22,6 +22,7 @@ for file in (source/'web').iterdir():
         shutil.copyfile(file,assets/file.name)
 html=(source/'web/index.html').read_text().replace('/assets/','./assets/').replace('src="./assets/app.js"','src="./host.js"')
 html=html.replace('./host.js"', './host.js'+version+'"').replace('./assets/style.css"', './assets/style.css'+version+'"')
+html=html.replace('./assets/workspace.css"', './assets/workspace.css'+version+'"')
 (out/'index.html').write_text(html)
 here=Path(__file__).parent
 for f in ('host.js','queries.js'):

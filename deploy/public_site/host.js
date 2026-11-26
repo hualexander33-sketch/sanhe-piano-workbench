@@ -54,11 +54,23 @@ window.fetch = async function(input, options = {}) {
   const name = path.slice('/api/read/'.length);
   const params = Object.fromEntries(url.searchParams);
   if (stored.asof === dateInChina) {
+    if (name === 'details' && stored.cached_month_income && params.kind === 'studio_income' &&
+        (!params.period || params.period === 'month') && Object.keys(params).every(k=>k==='period'||k==='kind')) {
+      try {
+        const response = await networkFetch(new URL('month-income.json'+version,root));
+        if (response.ok) {
+          const result = await response.json();
+          if (result.end === stored.asof && result.kind === 'studio_income') return json(result);
+        }
+      } catch {
+        // Continue with the normal read service if the cached slice is unavailable.
+      }
+    }
     if (name === 'report' && Object.keys(params).every(k => k === 'period')) {
       const report = stored.reports[params.period || 'month'];
-      if (report && 'lesson_fees' in report.stats) return json(report);
+      if (report && 'package_total' in report.stats) return json(report);
     }
-    if ((name === 'students' || name === 'packages') && !Object.keys(params).length) return json(stored[name]);
+    if ((name === 'students' || name === 'packages') && !Object.keys(params).length && (!stored[name].length || 'progress_total' in stored[name][0])) return json(stored[name]);
   }
   return query(name, params);
 };

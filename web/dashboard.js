@@ -1,197 +1,121 @@
 import {
-  session,
-  esc,
-  icon,
-  path,
-  link,
-  btn,
-  head,
-  panel,
-  empty,
-  tag,
-  avatar,
   admin,
+  canManage,
   canRecord,
-  read,
+  esc,
+  head,
+  icon,
+  link,
   pages,
-  actions,
-  teacher,
-  money,
-  yuan,
-  qty,
+  panel,
+  path,
+  read,
   scopeBar,
-  go,
-  reload,
-  types,
-  metricLinks,
+  session,
+  yuan,
 } from './ui.js';
+import { detailsPath } from './comparison.js';
+import { courseMix, hours, kpi, portfolio, teacherBars, trendPanel } from './visuals.js';
 
-import { teacherComparison } from './comparison.js';
-
-let trendMode = 'scenes';
-function detailUrl(kind, extra = {}) {
-  return path('details', { ...session.filter, kind, ...extra });
-}
-function kpi(title, value, unit, glyph, kind, note, tone, params = {}) {
-  return `<a class="kpi ${tone}" href="${esc(detailUrl(kind, params))}"><div class="kpi-label"><i>${icon(glyph)}</i><span>${esc(title)}</span></div><div class="kpi-number">${unit === '元' ? '<small>¥</small>' : ''}${esc(value)}${unit !== '元' ? `<small>${esc(unit)}</small>` : ''}</div><div class="kpi-foot"><span>${esc(note)}</span>${icon('up-right')}</div></a>`;
-}
-function chart(rows, fund) {
-  if (!rows.length) return empty();
-  const narrow = matchMedia('(max-width: 680px)').matches;
-  const w = narrow ? 350 : 620,
-    h = 184,
-    left = narrow ? 35 : 44,
-    right = 10,
-    top = 14,
-    bottom = 153,
-    dw = w - left - right,
-    step = dw / rows.length;
-  const keys = fund ? (admin() ? ['value', 'net'] : ['value']) : ['scenes'];
-  const val = (r, k) => r[k] / (fund ? 100 : 1);
-  const values = rows.flatMap((r) => keys.map((k) => val(r, k)));
-  const max = Math.max(...values, 1),
-    min = Math.min(0, ...values);
-  const quantum = Math.pow(10, Math.floor(Math.log10(Math.max(max - min, 1))));
-  const gap = Math.max(fund ? 0.01 : 1, (Math.ceil(((max - min) / 3 / quantum) * 2) * quantum) / 2);
-  const hi = Math.ceil(max / gap) * gap,
-    lo = Math.floor(min / gap) * gap;
-  const y = (v) => bottom - ((v - lo) / (hi - lo)) * (bottom - top);
-  const x = (i) => left + step * (i + 0.5);
-  let marks = '';
-  for (let value = lo; value <= hi + 0.001; value += gap) {
-    const label = value >= 10000 ? value / 10000 + '万' : String(value);
-    marks += `<line x1="${left}" x2="${w - right}" y1="${y(value)}" y2="${y(value)}" class="gridline"/><text x="${left - 9}" y="${y(value) + 4}" text-anchor="end">${esc(label)}</text>`;
-  }
-  const href = (r, k) =>
-    esc(
-      detailUrl(k === 'scenes' ? 'lessons' : k === 'value' ? 'consumption' : 'cash', {
-        period: 'custom',
-        start: r.start,
-        end: r.end,
-        ...(k === 'scenes' ? { only: 'taught' } : {}),
-      }),
-    );
-  if (fund) {
-    for (const [j, k] of keys.entries()) {
-      const px = (r, i) =>
-        x(i) +
-        (keys.length === 2 && Math.abs(y(val(r, keys[0])) - y(val(r, keys[1]))) <= 14
-          ? (j ? 1 : -1) * Math.min(5, step * 0.22)
-          : 0);
-      const points = rows.map((r, i) => [px(r, i), y(val(r, k))]);
-      const line = points.map(([a, b], i) => (i ? 'L' : 'M') + a.toFixed(2) + ' ' + b.toFixed(2)).join(' ');
-      if (!j)
-        marks += `<path d="${line} L${x(rows.length - 1)} ${y(0)} L${x(0)} ${y(0)} Z" fill="#e5efdf" opacity=".75" pointer-events="none"/>`;
-      marks += `<path d="${line}" fill="none" stroke="${j ? '#ba8359' : '#407659'}" stroke-width="2.5" pointer-events="none"/>`;
-      rows.forEach((r, i) => {
-        marks += `<a href="${href(r, k)}" aria-label="${esc(r.label)} ${k === 'net' ? '净收' : '消课'} ${money(r[k])}元"><title>${esc(r.label)} · ${money(r[k])} 元</title><rect x="${keys.length === 1 || !j ? x(i) - step / 2 : x(i)}" y="${y(val(r, k)) - 8}" width="${step / keys.length}" height="16" fill="transparent"/><circle pointer-events="none" cx="${px(r, i)}" cy="${y(val(r, k))}" r="3.5" fill="${j ? '#ba8359' : '#407659'}" stroke="white" stroke-width="1.5"/></a>`;
-      });
-    }
-  } else
-    rows.forEach((r, i) => {
-      const height = bottom - y(val(r, 'scenes')),
-        width = Math.min(step * 0.62, 42);
-      marks += `<a href="${href(r, 'scenes')}" aria-label="${esc(r.label)} ${r.scenes} 场"><title>${esc(r.label)} · ${r.scenes} 场</title><rect x="${x(i) - step / 2}" y="${top}" width="${step}" height="${bottom - top}" fill="transparent"/><rect rx="2.5" x="${x(i) - width / 2}" y="${bottom - Math.max(2, height)}" width="${width}" height="${Math.max(2, height)}" fill="${height ? '#5b8063' : '#dfe9dd'}"/></a>`;
-    });
-  const every = Math.max(1, Math.ceil(rows.length / (narrow ? 4 : 6)));
-  rows.forEach((r, i) => {
-    if (i % every === 0 || (i === rows.length - 1 && (i % every) / every > 0.45))
-      marks += `<text x="${x(i)}" y="176" text-anchor="middle">${esc(r.label.slice(5).replace('-', '/'))}</text>`;
-  });
-  return `<svg viewBox="0 0 ${w} ${h}" class="chart-svg" role="group" aria-label="${fund ? '收款与消课金额趋势' : '实际授课次数趋势'}">${marks}</svg>`;
+function priorities(r, q) {
+  const s = r.stats,
+    students = { asof: r.end, main_teacher: q.teacher, course: q.course, type: q.type };
+  const count = (kind) => new Set(r.alerts.filter((a) => a.kind === kind).map((a) => a.id)).size;
+  const rows = [
+    ['低课时学员', count('low') + ' 人', path('students', { ...students, follow: 'low' }), count('low')],
+    [
+      '状态待确认',
+      s.unverified_students + ' 人',
+      path('students', { ...students, follow: 'unknown' }),
+      s.unverified_students,
+    ],
+    [
+      '长期未上课',
+      count('idle') + ' 人',
+      path('students', { ...students, follow: 'idle' }),
+      count('idle'),
+    ],
+    ['待核课酬', s.pending_fees + ' 笔', detailsPath(q, 'fees', { state: 'pending' }), s.pending_fees],
+    ['待支付课酬', yuan(s.payable), detailsPath(q, 'payables', { flow: 'outstanding' }), s.payable],
+    ...(admin() ? [['导入异常', r.issues + ' 条', path('batches', { issues: '1' }), r.issues]] : []),
+    ...(s.pending_values
+      ? [['扣课待核', s.pending_values + ' 条', detailsPath(q, 'pending_lines'), s.pending_values]]
+      : []),
+  ];
+  return panel(
+    '待处理事项',
+    `<div class="task-grid">${rows.map(([label, num, href, active]) => `<a href="${esc(href)}" class="${active ? 'needs-attention' : ''}"><span>${esc(label)}</span><strong>${esc(num)}</strong>${icon('chevron')}</a>`).join('')}</div>`,
+  );
 }
 pages.home = async () => {
-  const r = await read('report', session.filter),
-    s = r.stats;
-  const controls =
-    (admin() ? link('import', '导入周表', {}, 'btn', 'import') : '') +
+  const q = session.filter,
+    r = await read('report', q),
+    s = r.stats,
+    full = admin();
+  const drill = (kind, x = {}) => detailsPath(q, kind, x);
+  const tools =
+    (canManage() ? link('import', '导入周表', {}, 'btn', 'import') : '') +
     (canRecord() ? link('manual', '手动记课', {}, 'btn primary', 'plus') : '');
+  const incomeLabel = s.income_missing
+    ? '留存待核'
+    : s.income_estimated
+      ? '参考课酬后留存'
+      : '确认课酬后留存';
+  const change = (key, note) => {
+    const metric = r.comparison?.metrics?.[key];
+    return metric
+      ? note +
+          ' · 较上期 ' +
+          (metric.change > 0 ? '+' : '') +
+          (metric.change * 100).toLocaleString('zh-CN', { maximumFractionDigits: 1 }) +
+          '%'
+      : r.comparison ? note + ' · 暂无可比数据' : note;
+  };
   const cards =
-    kpi('已上课时', s.scenes, '节', 'lessons', 'lessons', s.minutes + ' 分钟', 'feature', {
-      only: 'taught',
-    }) +
     kpi(
-      '已确认消课',
-      money(s.value),
-      '元',
-      'book',
-      'consumption',
-      s.pending_values ? s.pending_values + ' 笔待核' : '',
-      'clay',
+      '授课次数',
+      s.scenes + ' 场',
+      change('scenes', hours(s.minutes)),
+      drill('lessons', { only: 'taught' }),
     ) +
-    kpi(
-      '参考课酬',
-      s.reference_missing && !s.reference_count ? '待核' : money(s.reference_pay),
-      s.reference_missing && !s.reference_count ? '' : '元',
-      'earn',
-      'fees',
-      s.pending_fees ? s.pending_fees + ' 笔待核' : '',
-      'gold',
-      { flow: 'reference' },
-    ) +
-    (admin()
-      ? kpi('琴行总收入', money(s.studio_income), s.studio_income == null ? '' : '元', 'accounts', 'studio_income', s.income_missing ? s.income_missing + ' 笔课酬缺金额' : '', 'sage')
-      : kpi('累计待付款', money(s.payable), '元', 'accounts', 'payables', '截至 ' + r.end, 'sage'));
-  const segments = (act, options, selected) =>
-    `<div class="segments compact">${Object.entries(options)
-      .map(([k, v]) => btn(act, v, { id: k, style: 'segment ' + (k === selected ? 'active' : '') }))
-      .join('')}</div>`;
-  const fund = trendMode === 'fund';
-  const trend = panel(
-    '授课与收支趋势',
-    `<div class="chart-summary"><span class="legend"><i></i>${fund ? '已确认消课（元）' : '实际授课（场）'}</span>${fund && admin() ? '<span class="legend terracotta"><i></i>净收学费（元）</span>' : ''}</div>${chart(r.trend, fund)}`,
-    segments('trend', { scenes: '课量', fund: admin() ? '收支' : '消课' }, trendMode),
-    'chart-panel',
-  );
-  const balancesAtDate = admin() ? panel('学员与课包', metricLinks([
-    ['学员数', s.students + ' 位', path('students', { asof: r.end, main_teacher: session.filter.teacher, course: session.filter.course, type: session.filter.type })],
-    ['课包数', s.packages + ' 个', detailUrl('packages')],
-    ['剩余课时', qty(s.remaining) + ' 节', detailUrl('packages'), '共用课包按包统计'],
-    ['剩余课包价值', yuan(s.remaining_value), detailUrl('packages')],
-  ]), `<span class="muted">截至 ${esc(r.end)}</span>`) : '';
-  const numbers = admin()
-    ? [
-        ['课包收款待核', yuan(s.receipt_review), detailUrl('packages', { flow: 'receipt_review' })],
-        ['学生欠费', yuan(s.debt), detailUrl('packages', { flow: 'debt' })],
-        ['累计老师待付款', yuan(s.payable), detailUrl('payables')],
-      ]
-    : [
-        ['期间已付', yuan(s.paid), detailUrl('earnings'), '归属本期课酬'],
-        ['期间未付', yuan(s.unpaid), detailUrl('earnings'), '归属本期课酬'],
-        ['本期实际付款', yuan(s.actual_paid), detailUrl('payments'), '按付款日期'],
-      ];
-  const balances = panel(
-    admin() ? '期末往来' : '课酬与付款',
-    metricLinks(numbers),
-    `<span class="muted">截至 ${esc(r.end)}</span>`,
-  );
-  const alerts = [];
-  if (s.pending_fees)
-    alerts.push([detailUrl('fees', { state: 'pending' }), '课酬待核', s.pending_fees + ' 笔', 'amber']);
-  if (s.pending_values)
-    alerts.push([detailUrl('pending_lines'), '扣课待核', s.pending_values + ' 条', 'amber']);
-  if (r.issues && admin()) alerts.push([path('batches'), '导入问题', r.issues + ' 条', 'amber']);
-  r.alerts.forEach((a) =>
-    alerts.push([path('profile', { id: a.id }), a.name, a.text, a.kind === 'low' ? 'olive' : '']),
-  );
-  const todo = panel(
-    '待处理事项',
-    alerts.length
-      ? `<div class="todo-list">${alerts.map(([u, n, d, c]) => `<a href="${esc(u)}"><span class="todo-dot ${c}"></span><b>${esc(n)}</b><span>${esc(d)}</span>${icon('chevron')}</a>`).join('')}</div>`
-      : empty('当前没有待处理事项'),
-    tag(String(alerts.length) + ' 项'),
-  );
-  const mix = panel(
-    '课型构成',
-    `<div class="mix-list">${r.composition.map((obj) => `<a href="${esc(detailUrl('consumption', { type: obj.type }))}"><span>${esc(types[obj.type])}</span><b>${obj.scenes} 场 · ${qty(obj.units)} 次权益</b><small>已核消课 ${yuan(obj.value)} · 消课均价 ${obj.use_avg == null ? '—' : yuan(obj.use_avg)}${admin() ? ' · 购课均价 ' + (obj.buy_avg == null ? '—' : yuan(obj.buy_avg)) : ''}</small></a>`).join('')}</div>`,
-  );
+    kpi('消课金额', yuan(s.value), change('value', '按消课入账日'), drill('consumption')) +
+    (full
+      ? kpi(
+          '实际学费收款',
+          yuan(s.income_receipts),
+          change('income_receipts', '按收款日期'),
+          drill('cashflow', { flow: 'receipt' }),
+        ) +
+        kpi(
+          incomeLabel,
+          yuan(s.studio_income),
+          change(
+            'studio_income',
+            s.income_missing
+              ? s.income_missing + ' 笔缺少金额'
+              : s.income_estimated
+                ? '含 ' + s.income_estimated + ' 笔参考课酬'
+                : '已核定课酬',
+          ),
+          drill('studio_income'),
+          true,
+        )
+      : kpi('已确认课酬', yuan(s.verified_fees), '按实际授课日', drill('fees', { flow: 'verified' })) +
+        kpi(
+          '待核参考课酬',
+          s.pending_fees > s.pending_reference_count ? '待核' : yuan(s.pending_reference),
+          s.pending_fees + ' 笔待核',
+          drill('fees', { state: 'pending' }),
+          true,
+        ));
+  const base = r.comparison;
+  const foot = `<div class="period-notes"><span>${base ? '对比 ' + esc(base.start) + ' 至 ' + esc(base.end) : '暂无可比数据'}</span><div>${link('details', '已确认课酬 ' + yuan(s.verified_fees), { ...q, kind: 'fees', flow: 'verified' })}${link('details', '待核参考 ' + (s.pending_fees > s.pending_reference_count ? '待核' : yuan(s.pending_reference)), { ...q, kind: 'fees', state: 'pending' })}${full ? link('details', '已核部分留存 ' + yuan(s.retained), { ...q, kind: 'retention' }) : ''}</div></div>`;
   return (
-    head(admin() ? '经营总览' : '我的工作台', '', controls) +
+    head(full ? '经营总览' : '我的工作台', '', tools) +
     scopeBar(r) +
-    `<div class="kpis">${cards}</div>${balancesAtDate}${teacherComparison(r, session.filter, true)}${trend}${admin() ? `<a class="retention" href="${esc(detailUrl('retention'))}"><span>${icon('chart')} 本期确认留存</span><strong>${yuan(s.retained)}</strong><small>按已核定课酬</small>${icon('chevron')}</a>` : ''}${balances}<div class="duo-grid lower">${todo}${mix}</div>`
+    `<section aria-label="本期经营指标" class="figure-grid">${cards}</section>` +
+    foot +
+    (full ? portfolio(r, q) : '') +
+    `<div class="analytics-pair">${trendPanel(r, q)}${teacherBars(r, q)}</div><div class="lower-pair">${priorities(r, q)}${courseMix(r, q)}</div>`
   );
-};
-actions.trend = (el) => {
-  trendMode = el.dataset.id;
-  reload();
 };

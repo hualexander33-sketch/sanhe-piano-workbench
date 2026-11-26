@@ -123,7 +123,7 @@ actions.entry = async (el) => {
         text('contact', '本人或监护人联系方式', st.contact),
         text('course', '课程 / 科目', st.course, true),
         select('main_teacher', '主带老师', tOptions, st.main_teacher),
-        select('substitute_teacher', '临时代课老师（选填）', [['', '未指定'], ...teacherOptions()], st.substitute_teacher),
+        select('substitute_teacher', '临时代课老师（选填）', [['', '未指定'], ...teacherOptions()], st.substitute_teacher, false),
         date('enrolled', '入学日期', st.id ? st.enrolled : now, false),
         select('status', '在读状态', ['在读', '暂停', '结课', '待确认'], st.status),
       ];

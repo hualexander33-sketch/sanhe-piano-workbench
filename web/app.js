@@ -11,7 +11,7 @@ import {
   teacher,
   avatar,
   admin,
-  canRecord,
+  canRecord, readOnly,
   api,
   read,
   field,
@@ -56,7 +56,7 @@ const captions = {
   home: '经营总览',
   lessons: '课时记录',
   students: '学生档案',
-  teachers: '老师收入',
+  teachers: '老师管理',
   accounts: '账目管理',
   manual: '手动记课',
   record: '授课明细',
@@ -76,21 +76,23 @@ function loginPage() {
   session.meta = null;
   session.filter = { period: 'month' };
   window.dispatchEvent(new Event('qh-clear'));
-  document.title = '登录 · 琴行课时与经营管理系统 V1.0';
+  document.title = '登录 · 琴行课时与经营管理系统 V1.1';
   $('#app').innerHTML =
-    `<main class="login"><section class="login-photo" aria-label="琴房中的三角钢琴"><div class="photo-brand">${brand}<span>琴行工作台</span></div><div class="photo-title"><div class="photo-line"></div><h1>琴行课时与<br>经营管理系统</h1><p>V1.0</p></div></section><section class="login-panel"><div class="login-inner"><div class="mobile-brand">${brand} 琴行工作台</div><h2>登录工作台</h2><p class="subtext">使用琴行分配的账号，查看课时与账目。</p><form data-form="login" id="login-form">${field('username', '账号', { required: true, attrs: 'autocomplete="username" autocapitalize="none" placeholder="请输入账号"' })}${field('password', '密码', { type: 'password', required: true, attrs: 'autocomplete="current-password" placeholder="请输入密码"' })}<p id="login-error" class="form-error" role="alert"></p>${submitButton('登录', 'arrow')}</form>${session.demo ? `<div class="demo-options"><span>体验模拟账套</span><div>${btn('demo-login', '管理员体验', { id: 'demo-owner', style: 'btn small' })}${btn('demo-login', '教师体验', { id: 'demo-peng', style: 'btn small' })}</div><small>仅含虚构学生与收付记录</small></div>` : ''}</div></section></main>`;
+    `<main class="login"><section class="login-photo" aria-label="琴房中的三角钢琴"><div class="photo-brand">${brand}<span>琴行工作台</span></div><div class="photo-title"><div class="photo-line"></div><h1>琴行课时与<br>经营管理系统</h1><p>V1.1</p></div></section><section class="login-panel"><div class="login-inner"><div class="mobile-brand">${brand} 琴行工作台</div><h2>登录工作台</h2><p class="subtext">使用琴行分配的账号，查看课时与账目。</p><form data-form="login" id="login-form">${field('username', '账号', { required: true, attrs: 'autocomplete="username" autocapitalize="none" placeholder="请输入账号"' })}${field('password', '密码', { type: 'password', required: true, attrs: 'autocomplete="current-password" placeholder="请输入密码"' })}<p id="login-error" class="form-error" role="alert"></p>${submitButton('登录', 'arrow')}</form>${session.demo ? `<div class="demo-options"><span>体验模拟账套</span><div>${btn('demo-login', '管理员体验', { id: 'demo-owner', style: 'btn small' })}${btn('demo-login', '教师体验', { id: 'demo-peng', style: 'btn small' })}</div><small>仅含虚构学生与收付记录</small></div>` : ''}</div></section></main>`;
 }
 function shell() {
-  const { account, mode, today } = session.meta;
+  const { account, mode } = session.meta;
+  const updated = (session.meta.updated_at || '').slice(0,16).replace('T',' ');
+  const stamp = updated ? `<time class="top-date" datetime="${esc(session.meta.updated_at)}" title="最近业务更新 ${esc(updated)}">${icon('time')}<span class="update-long">数据更新 ${esc(updated)}</span><span class="update-short">更新 ${esc(updated.slice(5))}</span></time>` : '';
   const who = account.teacher ? teacher(account.teacher) : account.id;
   const items = nav
     .map(
       ([id, t]) =>
-        `<a class="nav-item" href="${path(id)}" data-nav="${id}">${icon(id)}<span>${t}</span></a>`,
+        `<a class="nav-item" href="${path(id)}" data-nav="${id}" aria-label="${esc(t)}">${icon(id)}<span>${t}</span></a>`,
     )
     .join('');
   $('#app').innerHTML =
-    `<div class="workspace"><aside class="sidebar"><a class="brand" href="#/home">${brand}<span><strong>琴行工作台</strong><small>课时与经营管理系统</small></span></a><nav aria-label="主导航">${items}</nav><div class="side-bottom"><a class="nav-item" href="#/settings" data-nav="settings">${icon('settings')}<span>系统设置</span></a><span class="version">琴行管理系统 <b>V1.0</b></span></div></aside><div class="main-shell"><header class="topbar"><div class="breadcrumbs"><span>工作台</span>${icon('chevron')}<strong id="crumb-current">首页</strong></div><a href="#/home" class="mobile-wordmark">${brand}琴行工作台</a><div class="top-right">${mode === 'demo' ? '<span class="demo-flag"><i></i>模拟账套</span>' : ''}<span class="top-date">${icon('lessons')}${esc(today)}</span><button class="profile-btn" type="button" aria-label="${esc(who)} · 账号设置" data-act="account-menu">${avatar(who, account.teacher)}<span>${esc(who)}</span>${icon('down')}</button></div></header><main id="view" tabindex="-1"></main></div><nav class="mobile-nav" aria-label="手机导航">${items}</nav></div>`;
+    `<div class="workspace"><aside class="sidebar"><a class="brand" href="#/home">${brand}<span><strong>三合琴行</strong><small>经营工作台</small></span></a><nav aria-label="主导航">${items}</nav><div class="side-bottom">${readOnly() ? '' : '<a class="nav-item" href="#/settings" data-nav="settings">'+icon('settings')+'<span>系统设置</span></a>'}<span class="version">琴行管理系统 <b>V1.1</b></span></div></aside><div class="main-shell"><header class="topbar"><div class="breadcrumbs"><span>工作台</span>${icon('chevron')}<strong id="crumb-current">首页</strong></div><a href="#/home" class="mobile-wordmark">${brand}琴行工作台</a><div class="top-right">${mode === 'demo' ? '<span class="demo-flag"><i></i>模拟账套</span>' : ''}${stamp}${readOnly()?'<span class="viewer-id">内部查看</span>':`<button class="profile-btn" type="button" aria-label="${esc(who)} · 账号设置" data-act="account-menu">${avatar(who, account.teacher)}<span>${esc(who)} · ${esc(roles[account.role])}</span>${icon('down')}</button>`}</div></header><div id="load-status" role="status" hidden></div><main id="view" tabindex="-1"></main></div><nav class="mobile-nav" aria-label="手机导航">${items}</nav></div>`;
 }
 async function render() {
   if (!session.meta) return;
@@ -100,6 +102,8 @@ async function render() {
     session.filter = reportScope(params);
   }
   closeDialog();
+  const drawer=document.getElementById('record-drawer');
+  if(drawer?.open) drawer.close();
   const active = parents[page] || page;
   for (const e of document.querySelectorAll('[data-nav]')) {
     const current = e.dataset.nav === (page === 'settings' ? 'settings' : active);
@@ -109,22 +113,30 @@ async function render() {
   }
   const title = captions[page] || '工作台';
   $('#crumb-current').textContent = title;
-  document.title = title + ' · 琴行课时与经营管理系统 V1.0';
+  document.title = title + ' · 琴行课时与经营管理系统 V1.1';
   const v = $('#view');
   v.setAttribute('aria-busy', 'true');
+  const indicator=document.getElementById('load-status');
+  indicator.hidden=true;
+  const timer=setTimeout(()=>{if(version===epoch){indicator.textContent='正在读取'+title+'…';indicator.hidden=false;}},180);
   try {
+    if (readOnly() && ['manual','settings'].includes(page)) throw Error('此页面仅供管理端使用');
     if (!pages[page]) throw Error('页面不存在');
     const html = await pages[page](params);
     if (version === epoch) {
       v.innerHTML = html;
       v.removeAttribute('aria-busy');
+      if (window.pendingListAnchor) {
+        document.getElementById(window.pendingListAnchor)?.scrollIntoView({block:'start'});
+        window.pendingListAnchor=null;
+      }
     }
   } catch (e) {
     if (version === epoch) {
       v.innerHTML = `<section class="panel error-box"><h2>无法打开此页</h2><p>${esc(e.message)}</p>${btn('retry', '重试')}</section>`;
       v.removeAttribute('aria-busy');
     }
-  }
+  } finally {clearTimeout(timer); if(version===epoch)indicator.hidden=true;}
 }
 actions.retry = reload;
 actions['account-menu'] = () =>
@@ -155,6 +167,25 @@ async function login(data) {
 }
 forms.login = (f) => login(values(f));
 actions['demo-login'] = (el) => login({ username: el.dataset.id, password: 'QinhangDemo2026' });
+let drawerVersion=0;
+async function openRecordDrawer(drawer,id,trigger) {
+  const n=++drawerVersion, body=drawer.querySelector('.drawer-body');
+  const dismiss=drawer.querySelector('button');
+  body.innerHTML='<p role="status">正在加载授课明细…</p>';
+  drawer.showModal(); drawer.scrollTop=0; dismiss.focus();
+  drawer.addEventListener('close',()=>{++drawerVersion;if(trigger.isConnected)trigger.focus({preventScroll:true});},{once:true});
+  try {
+    const html=await pages.record({id});
+    if(drawer.open && n===drawerVersion) body.innerHTML=html;
+  } catch(error) {if(drawer.open && n===drawerVersion)body.innerHTML='<p role="alert">'+esc(error.message)+'</p>';}
+}
+const recordDrawer=document.getElementById('record-drawer');
+recordDrawer.querySelector('button').onclick=()=>recordDrawer.close();
+recordDrawer.addEventListener('click',e=>{
+  if(e.target!==recordDrawer)return;
+  const b=recordDrawer.getBoundingClientRect();
+  if(e.clientX<b.left||e.clientX>b.right||e.clientY<b.top||e.clientY>b.bottom)recordDrawer.close();
+});
 let busy = false;
 async function handle(handler, el) {
   if (!handler || busy) return;
@@ -175,6 +206,15 @@ async function handle(handler, el) {
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[href^="#/"]');
   if (a) {
+    if(e.defaultPrevented || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if(a.classList.contains('page-turn')) window.pendingListAnchor=a.closest('.page-list')?.id;
+    const drawer=document.getElementById('record-drawer');
+    if(a.hash.startsWith('#/record?') && !a.closest('#record-drawer') && !a.closest('#modal') && a.closest('#view') && ['lessons','details','accounts','teacher','profile','pack'].includes(route().page)){
+      e.preventDefault();
+      const id=new URLSearchParams(a.hash.split('?')[1]).get('id');
+      openRecordDrawer(drawer,id,a);
+      return;
+    }
     closeDialog();
     if (a.hash === location.hash) {
       e.preventDefault();

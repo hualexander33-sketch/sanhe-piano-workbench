@@ -14,7 +14,6 @@ export const icon = (name) =>
 export const types = { solo: '45 分钟一对一', duo: '60 分钟一对二' };
 export const states = { present: '到课', leave: '请假', cancel: '取消', absent_charge: '缺席扣课' };
 export const roles = { owner: '老板管理员', ops: '运营管理员', teacher: '授课老师' };
-export const names = { HU: '胡老师', JIA: '嘉老师', PENG: '彭老师', WEN: '文老师' };
 export const statuses = {
   ok: '已确认',
   studio: '已确认',
@@ -33,9 +32,11 @@ export const reportScope = (params) =>
   Object.fromEntries(scopeKeys.filter((key) => params[key]).map((key) => [key, params[key]]));
 export const admin = () => !!session.meta && session.meta.account.role !== 'teacher';
 export const owner = () => session.meta?.account.role === 'owner';
-export const canRecord = () => admin() || !!session.meta?.account.can_record;
+export const readOnly = () => session.meta?.read_only === true || session.meta?.csrf === '';
+export const canManage = () => admin() && !readOnly();
+export const canRecord = () => !readOnly() && (admin() || !!session.meta?.account.can_record);
 export const teacher = (id) =>
-  session.meta?.teachers.find((t) => t.id === id)?.name || names[id] || id || '—';
+  session.meta?.teachers.find((t) => t.id === id)?.name || id || '—';
 export const teacherOptions = () => session.meta.teachers.map((t) => [t.id, t.name]);
 export const money = (v) =>
   v == null
@@ -168,13 +169,21 @@ export async function api(url, { data, headers = {} } = {}) {
   }
   return out;
 }
-export const read = (op, p = {}) =>
-  api(
-    '/api/read/' +
-      op +
-      '?' +
-      new URLSearchParams(Object.entries(p).filter(([, v]) => v !== '' && v != null)),
-  );
+const guestCache = new Map();
+window.addEventListener('qh-clear', () => guestCache.clear());
+export function read(op, p = {}) {
+  const query = new URLSearchParams(Object.entries(p).filter(([,v]) => v !== '' && v != null));
+  query.sort();
+  const url = '/api/read/' + op + '?' + query.toString();
+  if (!readOnly() || !['report','students','packages','profile','details','bills'].includes(op)) return api(url);
+  const now = Date.now(), saved = guestCache.get(url);
+  if (saved && now - saved.at < 60000) return saved.promise;
+  const promise = api(url).catch(error => { guestCache.delete(url); throw error; });
+  if (guestCache.size >= 20) guestCache.delete(guestCache.keys().next().value);
+  guestCache.set(url, {at:now, promise});
+  return promise;
+}
+
 const pending = new Map();
 function fingerprint(text) {
   let a = 2166136261,
@@ -241,9 +250,23 @@ export function scopeBar(r) {
     .map(([k, v]) => btn('period', v, { id: k, style: 'segment ' + (f.period === k ? 'active' : '') }))
     .join(
       '',
-    )}</div><div class="period-end"><span>${esc(r.start)} — ${esc(r.end)}</span>${btn('filters', extra.join(' · ') || '筛选', { glyph: 'filter', style: 'btn small' })}</div></section>`;
+    )}</div><div class="period-end"><div class="range-control">${f.period !== 'all' ? btn('shift-period','‹',{id:'-1',style:'range-arrow',attrs:'aria-label="上一周期" data-start="'+esc(r.start)+'" data-end="'+esc(r.end)+'"'}) : ''}<span>${esc(r.start)} — ${esc(r.end)}</span>${f.period !== 'all' ? btn('shift-period','›',{id:'1',style:'range-arrow',attrs:'aria-label="下一周期" data-start="'+esc(r.start)+'" data-end="'+esc(r.end)+'" '+(r.end>=session.meta.today?'disabled':'')}) : ''}</div>${btn('filters', extra.join(' · ') || '筛选', { glyph: 'filter', style: 'btn small' })}</div></section>`;
 }
+actions['shift-period'] = el => {
+  const direction=Number(el.dataset.id), start=new Date(el.dataset.start+'T12:00:00Z'), end=new Date(el.dataset.end+'T12:00:00Z');
+  const iso=d=>d.toISOString().slice(0,10), add=(d,n)=>new Date(d.getTime()+n*86400000);
+  const f={...session.filter};
+  if(f.period==='custom') {
+    const days=Math.round((end-start)/86400000)+1;
+    applyScope({...f,start:iso(add(start,days*direction)),end:iso(add(end,days*direction))});
+  } else {
+    if(f.period==='last_month') f.period='month';
+    const next=f.period==='week' ? add(start,7*direction) : new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()+({month:1,quarter:3,year:12}[f.period]||1)*direction,1,12));
+    applyScope({...f,anchor:iso(next)});
+  }
+};
 actions.period = (el) => {
+
   const p = el.dataset.id;
   if (p === 'custom') {
     actions.filters(el, true);

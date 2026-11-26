@@ -10,7 +10,7 @@ def session(db):
     for teacher in teachers:
         teacher["rules"] = many(db, "SELECT * FROM rules WHERE teacher=? ORDER BY since DESC", (teacher["id"],))
     return dict(account=VIEWER, teachers=teachers, mode="live", today=today(), low=cfg(db, "low"),
-                idle=cfg(db, "idle"), activation=cfg(db, "activation"), csrf="")
+                idle=cfg(db, "idle"), activation=cfg(db, "activation"), read_only=True, updated_at=reports.data_updated(db), csrf="")
 
 
 def read(db, name, params):

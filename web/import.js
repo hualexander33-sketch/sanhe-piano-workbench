@@ -18,7 +18,7 @@ import {
   qty,
   money,
   yuan,
-  admin,
+  admin, readOnly,
   read,
   write,
   go,
@@ -38,7 +38,8 @@ import {
   crumb,
 } from './ui.js';
 
-const phases = ['选择周表', '字段对应', '校验预览', '批次结果'];
+import {adaptiveTable,pagingLinks} from './visuals.js';
+const phases = ['上传文件', '字段映射', '数据预览', '异常核对', '确认导入', '批次结果'];
 const scopes = {
   unknown: '待确认',
   student: '逐学生金额',
@@ -170,7 +171,7 @@ async function openBatch(id) {
     info = await read('inspect', { file: b.file, sheet: b.sheet, header: c.header || 1 });
   draft = {
     ...blank(),
-    stage: b.result ? 4 : 2,
+    stage: b.result ? 6 : 2,
     id: b.id,
     file: { file: b.file, name: b.name, sheets: info.sheets },
     sheet: b.sheet,
@@ -320,6 +321,7 @@ forms['import-preview'] = async () => {
   await preview();
 };
 actions['import-step'] = (el) => {
+  draft.page = 0;
   draft.stage = Number(el.dataset.id);
   reload();
 };
@@ -369,8 +371,9 @@ actions['group-page'] = (el) => {
 function result(current) {
   const r = draft.report,
     s = r.stats,
-    final = draft.stage === 4;
-  const sections = r.groups.slice(draft.page * 20, draft.page * 20 + 20).map((g) => {
+    final = draft.stage === 6;
+  const groups=draft.stage===4?r.groups.filter(g=>g.status!=='posted'||g.detail?.fees?.some(f=>f.status==='pending')||g.detail?.lines?.some(l=>l.status==='pending')):r.groups;
+  const sections = groups.slice(draft.page * 20, draft.page * 20 + 20).map((g) => {
     const d = g.detail || {},
       p = g.payload || {},
       fees = d.fees || [],
@@ -452,7 +455,10 @@ function result(current) {
   ]) : '';
   const controls = final
     ? btn('import-new', '导入下一份', { glyph: 'import', style: 'btn primary' })
-    : btn('confirm-import', '确认导入', { glyph: 'check', style: 'btn primary' });
+    : draft.stage===3?btn('import-step','核对异常',{id:'4',style:'btn primary'}):
+      draft.stage===4?btn('import-step','继续确认',{id:'5',style:'btn primary'}):
+      btn('confirm-import','确认导入',{glyph:'check',style:'btn primary'});
+
   const byTeacher = Object.entries(r.teachers).map(([t, x]) => {
     const fees = r.groups
       .filter((g) => g.status === 'posted' && g.detail.teacher === t)
@@ -469,14 +475,14 @@ function result(current) {
   });
   return (
     panel(
-      final ? '批次结果' : '校验预览',
-      `<p class="file-caption">${icon('file')} ${esc(draft.file.name)} <span>${esc(draft.sheet)}</span></p>${final ? `<section aria-label="本批次当前有效记录">${latest}</section><details><summary>查看确认导入时的快照</summary>${counts}</details>` : counts}<div class="form-foot">${!final && !draft.locked ? btn('import-step', '返回字段对应', { id: '2' }) : ''}${controls}</div>`,
+      final ? '批次结果' : phases[draft.stage-1]==='数据预览'?'校验预览':phases[draft.stage-1],
+      `<p class="file-caption">${icon('file')} ${esc(draft.file.name)} <span>${esc(draft.sheet)}</span></p>${final ? `<section aria-label="本批次当前有效记录">${latest}</section><details><summary>查看确认导入时的快照</summary>${counts}</details>` : counts}<div class="form-foot">${!final && !draft.locked ? btn('import-step', '上一步', { id: String(draft.stage-1) }) : ''}${controls}</div>`,
     ) +
-    panel(
-      final ? '原始行与确认时记录' : '逐场核对',
+    (draft.stage===5 ? panel('导入范围','<p class="profile-note">按本次预览登记通过的场次。重复行将跳过，异常与修订保留在批次中。</p>') : panel(
+      final ? '原始行与确认时记录' : draft.stage===4 ? '需核对的场次' : '逐场核对',
       table(['原表行', '状态', '场次 / 老师', '学生 / 课包 / 消课', '课酬核对', '依据与操作'], sections) +
-        `<div class="pager"><span>共 ${r.groups.length} 场次组 · 第 ${draft.page + 1} 页</span>${draft.page ? btn('group-page', '上一页', { id: '-1' }) : ''}${(draft.page + 1) * 20 < r.groups.length ? btn('group-page', '下一页', { id: '1' }) : ''}</div>`,
-    ) +
+        `<div class="pager"><span>共 ${groups.length} 场次组 · 第 ${draft.page + 1} 页</span>${draft.page ? btn('group-page', '上一页', { id: '-1' }) : ''}${(draft.page + 1) * 20 < groups.length ? btn('group-page', '下一页', { id: '1' }) : ''}</div>`,
+    )) +
     panel(final ? '确认导入时的老师汇总' : '各老师汇总', table(['老师', '实授场次', '实际分钟', '确认课酬'], byTeacher)) +
     (Object.keys(r.weekly || {}).length
       ? panel(
@@ -515,9 +521,20 @@ function result(current) {
 }
 pages.import = async (p) => {
   if (!admin()) throw Error('每周导入需要管理员权限');
+  if(readOnly()) {
+    if(!p.batch) throw Error('导入文件需要管理身份');
+    const [batch,totals]=await Promise.all([read('batch',{id:p.batch,view:'trace',row:p.row,issues:p.issues,trace_page:p.trace_page}),read('batch_totals',{id:p.batch})]);
+    const lines=batch.rows.map(r=>[esc(r.row_key),badge(r.status),esc(r.day||'—'),esc(r.teacher?teacher(r.teacher):'—'),esc(r.note||'—'),r.lesson?link('record','授课明细',{id:r.lesson}):'—']);
+    const filters=p.row||p.issues?link('import','查看整批',{batch:p.batch},'btn small'):link('import','只看异常',{batch:p.batch,issues:'1'},'btn small');
+    return crumb('batches','导入批次')+head('批次结果',batch.name+' · '+batch.sheet)+
+      panel('批次记录',metrics([['有效场次',totals.scenes],['已扣课',qty(totals.units)+' 节'],['学生记录',totals.students],['课酬待核',totals.pending+' 笔']]))+
+      panel('来源行与核对结果','<div class="page-list" id="list-trace_page">'+adaptiveTable(['来源行','导入结果','上课日期','实际老师','核对说明','明细'],lines,[0,1],p.issues?'没有异常或修订行':'没有符合条件的来源行')+pagingLinks('trace_page',batch.page,batch.count,20)+'</div>',filters)+
+      panel('批次来源','<p class="profile-note">'+esc(batch.id)+' · '+esc(batch.actor)+' · '+esc(batch.created)+'</p>');
+  }
+
   if (p.batch && p.batch !== draft.batchRoute) await openBatch(p.batch);
-  if (!p.batch && draft.batchRoute && draft.stage === 4) draft = blank();
-  const current = draft.stage === 4 ? await read('batch_totals', { id: draft.id }) : null;
+  if (!p.batch && draft.batchRoute && draft.stage === 6) draft = blank();
+  const current = draft.stage === 6 ? await read('batch_totals', { id: draft.id }) : null;
   return (
     crumb('lessons', '课时记录') +
     head(
@@ -530,21 +547,23 @@ pages.import = async (p) => {
     '<p class="page-error" role="alert"></p>'
   );
 };
-pages.batches = async () => {
-  const rows = await read('batches');
+pages.batches = async (p) => {
+  const all=await read('batches');
+  const rows=p.issues==='1'?all.filter(row=>row.issues>0):all;
   return (
     crumb('lessons', '课时记录') +
     head(
       '导入批次',
       '追溯原文件、工作表、确认人和问题行',
-      btn('import-new', '导入周表', { glyph: 'import', style: 'btn primary' }),
+      readOnly()?'':btn('import-new', '导入周表', { glyph: 'import', style: 'btn primary' }),
     ) +
+    (p.issues==='1'?link('batches','查看全部批次',{},'btn small'):'') +
     panel(
-      '批次记录',
+      p.issues==='1'?'有异常的批次':'批次记录',
       table(
         ['文件 / 批次', '工作表', '操作人', '创建时间', '状态'],
         rows.map((r) => [
-          link('import', r.name, { batch: r.id }) + '<small>' + esc(r.id) + '</small>',
+          link('import', r.name, { batch: r.id,issues:p.issues }) + '<small>' + esc(r.id) + '</small>',
           esc(r.sheet),
           esc(r.actor),
           esc(r.created),

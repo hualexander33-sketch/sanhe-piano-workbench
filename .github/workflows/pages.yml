@@ -31,6 +31,9 @@ jobs:
           fs.writeFileSync(process.env.RUNNER_TEMP+'/display.zip', Buffer.concat([decipher.update(bytes.subarray(12,-16)),decipher.final()]));
           JS
           unzip -oq "$RUNNER_TEMP/display.zip" initial.json ledger.zip -d _site
+          if unzip -Z1 "$RUNNER_TEMP/display.zip" | grep -qx 'month-income.json'; then
+            unzip -oq "$RUNNER_TEMP/display.zip" month-income.json -d _site
+          fi
       - name: Package the business report runtime
         run: |
           curl --retry 3 --retry-all-errors -fsSL https://github.com/pyodide/pyodide/releases/download/0.27.7/pyodide-core-0.27.7.tar.bz2 -o "$RUNNER_TEMP/core.tar.bz2"
