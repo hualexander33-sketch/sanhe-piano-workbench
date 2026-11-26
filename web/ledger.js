@@ -185,6 +185,7 @@ function cell(row, k, asof) {
   if (k === 'type') return esc(types[val] || val);
   if (k === 'state') return esc(states[val] || val);
   if (k === 'status') return badge(val);
+  if (k === 'fee_basis' && val === '全额归琴行') return '已核定';
   if (k === 'student') return admin() ? link('profile', row.student_name || val, { id: val, asof }) : esc(row.student_name || val);
   if (k === 'kind' || k === 'scope') return esc(labels[val] || val);
   if (k === 'detail') return `<details><summary>查看</summary><p class="break">${esc(val)}</p></details>`;
@@ -480,13 +481,12 @@ pages.teachers = async () => {
       .map((t) => {
         const info = session.meta.teachers.find((x) => x.id === t.id),
           rule = info.rules.find((x) => x.since <= r.end);
-        const payLabel = t.income_to_studio ? '本期消课归琴行' : '本期参考课酬';
-        const shareLabel = t.income_to_studio ? '琴行 100%' : '期末分成 ' + (rule ? rule.bp / 100 + '%' : '待核');
-        return `<a class="teacher-card" href="${esc(path('teacher', { ...session.filter, id: t.id }))}"><header>${avatar(t.name, t.id)}<div><h3>${esc(t.name)}</h3><small>${esc([info.subject, info.audience].filter(Boolean).join(' · ') || '授课老师')}</small></div>${icon('chevron')}</header><div class="teacher-pay"><small>${payLabel}</small><strong>${t.income_to_studio ? yuan(t.value) : referencePay(t)}</strong>${t.pending_fees ? tag(t.pending_fees + ' 笔待核', 'amber') : ''}</div><footer><span>${t.scenes} 节 · 其中代课 ${t.substitutes} 节</span><span>${shareLabel}</span></footer></a>`;
+        const shareLabel = '分成 ' + (rule ? rule.bp / 100 + '%' : '待核');
+        return `<a class="teacher-card" href="${esc(path('teacher', { ...session.filter, id: t.id }))}"><header>${avatar(t.name, t.id)}<div><h3>${esc(t.name)}</h3><small>${esc([info.subject, info.audience].filter(Boolean).join(' · ') || '授课老师')}</small></div>${icon('chevron')}</header><div class="teacher-pay"><small>参考课酬</small><strong>${referencePay(t)}</strong>${t.pending_fees ? tag(t.pending_fees + ' 笔待核', 'amber') : ''}</div><footer><span>${t.scenes} 节${t.substitutes ? ' · 代课 ' + t.substitutes + ' 节' : ''}</span><span>${shareLabel}</span></footer></a>`;
       })
       .join('');
   return (
-    head(admin() ? '老师收入' : '我的收入', '课量和课酬按实际上课老师归属') +
+    head(admin() ? '老师收入' : '我的收入') +
     scopeBar(r) +
     `<div class="teacher-grid">${cards}</div>` +
     teacherComparison(r, session.filter)
@@ -509,15 +509,12 @@ pages.teacher = async ({ id }) => {
       admin() ? entry('teacher_profile', '编辑档案', 'data-ref="' + esc(id) + '"') : '',
     ) +
     scopeBar(r) +
-    (t.income_to_studio ? panel('收入归属', metricLinks([
-      ['消课收入全额归琴行',yuan(s.value),detailsPath(q,'consumption'),'含代课，按实际授课老师归属'],
-      ['外发课酬',yuan(s.actual_paid),detailsPath(q,'payments'),'按实际付款日'],
-    ])) : panel('本期课酬',metricLinks([
-      ['参考课酬',referencePay(s),detailsPath(q,'fees',{flow:'reference'}),'按逐节记录试算'],
-      ['已确认应付',confirmedPay(s),!s.earned_entries && s.pending_fees ? detailsPath(q,'fees',{state:'pending'}) : detailsPath(q,'earnings'),'按应付入账日期'],
-      ['实际已付',actualPay(s),detailsPath(q,'payments'),'按付款日期'],
-      ['累计待付款',yuan(s.payable),detailsPath(q,'payables'),'仅含已确认应付'],
-    ]))) +
+    panel('本期课酬',metricLinks([
+      ['参考课酬',referencePay(s),detailsPath(q,'fees',{flow:'reference'})],
+      ['已确认应付',confirmedPay(s),!s.earned_entries && s.pending_fees ? detailsPath(q,'fees',{state:'pending'}) : detailsPath(q,'earnings')],
+      ['实际已付',actualPay(s),detailsPath(q,'payments')],
+      ['累计待付款',yuan(s.payable),detailsPath(q,'payables')],
+    ])) +
     panel('期间课量', metricLinks([
       ['已上课时',s.scenes + ' 节',detailsPath(q,'lessons',{only:'taught'})],
       ['其中代课',s.substitutes + ' 节',detailsPath(q,'lessons',{only:'taught',coverage:'substitute'})],
@@ -579,24 +576,23 @@ pages.accounts = async (p) => {
   return (
     head(
       '账目管理',
-      isAdmin ? '按实际收付日期查账，独立核对教师结算与付款' : '查看本人课酬与付款分配',
+      '',
       isAdmin ? entry('receipt', '记收款') + entry('settle', '老师结算', '', 'btn primary') : '',
     ) +
     scopeBar(r) +
     (isAdmin ? studioIncomePanel(r, session.filter) : '') +
     (isAdmin ? panel('学费与课包', metricLinks([
-      ['本期课包登记金额',yuan(r.stats.registered),detailsPath(session.filter,'packages',{flow:'registered'}),'按课包统计缴费日'],
-      ['本期已确认到账',yuan(r.stats.receipts),detailsPath(session.filter,'cash',{flow:'receipts'}),'纸卡按确认的统计缴费日归期'],
-      ['本期消课金额',yuan(r.stats.value),detailsPath(session.filter,'consumption'),'按消课流水'],
-      ['期末收款待核',yuan(r.stats.receipt_review),detailsPath(session.filter,'packages',{flow:'receipt_review'}),r.stats.receipt_review ? '原课包到账情况待核实' : '无待核收款'],
+      ['本期课包登记金额',yuan(r.stats.registered),detailsPath(session.filter,'packages',{flow:'registered'})],
+      ['本期已确认到账',yuan(r.stats.receipts),detailsPath(session.filter,'cash',{flow:'receipts'}),'纸卡按统计缴费日'],
+      ['期末收款待核',yuan(r.stats.receipt_review),detailsPath(session.filter,'packages',{flow:'receipt_review'})],
       ['本期退款',yuan(r.stats.refunds),detailsPath(session.filter,'cash',{flow:'refunds'})],
       ['期末已确认欠费',yuan(r.stats.debt),detailsPath(session.filter,'packages',{flow:'debt'})],
     ])) : '') +
     panel('老师课酬与付款',metricLinks([
-      ['本期待核课酬',r.stats.pending_fees && !r.stats.pending_reference_count ? '待核' : yuan(r.stats.pending_reference),detailsPath(session.filter,'fees',{state:'pending'}),r.stats.pending_fees + ' 笔待核 · 已有试算金额合计'],
-      ['本期已确认应付',confirmedPay(r.stats),!r.stats.earned_entries && r.stats.pending_fees ? detailsPath(session.filter,'fees',{state:'pending'}) : detailsPath(session.filter,'earnings'),'按应付入账日期'],
-      ['本期实际已付',actualPay(r.stats),detailsPath(session.filter,'payments'),'按付款日期'],
-      ['期末待付款',yuan(r.stats.payable),detailsPath(session.filter,'payables'),'已确认应付减已分配付款'],
+      ['本期待核课酬',r.stats.pending_fees && !r.stats.pending_reference_count ? '待核' : yuan(r.stats.pending_reference),detailsPath(session.filter,'fees',{state:'pending'}),r.stats.pending_fees ? r.stats.pending_fees + ' 笔待核' : ''],
+      ['本期已确认应付',confirmedPay(r.stats),!r.stats.earned_entries && r.stats.pending_fees ? detailsPath(session.filter,'fees',{state:'pending'}) : detailsPath(session.filter,'earnings')],
+      ['本期实际已付',actualPay(r.stats),detailsPath(session.filter,'payments')],
+      ['期末待付款',yuan(r.stats.payable),detailsPath(session.filter,'payables')],
     ])) +
     tabs('accounts', opt, tab, session.filter) +
     panel(opt[tab], data, tab === 'bills' ? '' : exportLink(tab, q)) +
@@ -655,7 +651,9 @@ pages.record = async ({ id }) => {
     f.difference == null ? '—' : yuan(f.difference),
     d.history ? '已含期初' : yuan(f.final),
     badge(f.status),
-    esc(f.reason || '—'),
+    f.status === 'studio' && f.reason
+      ? `<details><summary>查看</summary><p class="break">${esc(f.reason)}</p></details>`
+      : esc(f.reason || '—'),
     esc(f.reviewer || '—'),
     admin() && f.status === 'pending' && d.active
       ? entry('review_fee', '核对课酬', 'data-ref="' + esc(f.id) + '"')

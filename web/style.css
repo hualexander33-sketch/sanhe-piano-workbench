@@ -523,6 +523,7 @@ strong,
 }
 .kpi-foot .icon {
   width: 14px;
+  margin-inline-start: auto;
 }
 .duo-grid {
   display: grid;
@@ -536,10 +537,6 @@ strong,
 .teacher-charts {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.scope-heading {
-  font-size: 15px;
-  margin: 0 0 10px;
-}
 .linked-metrics {
   row-gap: 16px;
 }
@@ -549,10 +546,10 @@ strong,
   font-size: 12px;
 }
 .report-note { margin: 12px 0 0; }
-.income-total { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; color: var(--ink); justify-content: flex-end; }
-.income-total small { color: var(--quiet); font-size: 12px; }
+.income-total { display: inline-flex; align-items: center; gap: 4px; color: var(--ink); }
+.income-total .icon { width: 15px; color: var(--quiet); }
 .income-total strong { font-size: clamp(17px, 2vw, 23px); font-variant-numeric: tabular-nums; }
-.studio-income .balance-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.studio-income .balance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .comparison-mobile { display: none; }
 .teacher-summary { border-bottom: 1px solid var(--line); }
 .teacher-summary summary {

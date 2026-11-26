@@ -26,7 +26,7 @@ import {
   metricLinks,
 } from './ui.js';
 
-import { studioIncomePanel, teacherComparison } from './comparison.js';
+import { teacherComparison } from './comparison.js';
 
 let trendMode = 'scenes';
 function detailUrl(kind, extra = {}) {
@@ -107,7 +107,7 @@ pages.home = async () => {
     (admin() ? link('import', '导入周表', {}, 'btn', 'import') : '') +
     (canRecord() ? link('manual', '手动记课', {}, 'btn primary', 'plus') : '');
   const cards =
-    kpi('已上课时', s.scenes, '节', 'lessons', 'lessons', '真实教学 ' + s.minutes + ' 分钟', 'feature', {
+    kpi('已上课时', s.scenes, '节', 'lessons', 'lessons', s.minutes + ' 分钟', 'feature', {
       only: 'taught',
     }) +
     kpi(
@@ -116,21 +116,21 @@ pages.home = async () => {
       '元',
       'book',
       'consumption',
-      s.pending_values ? '另有 ' + s.pending_values + ' 笔待核消课' : '按课包原价累计分摊',
+      s.pending_values ? s.pending_values + ' 笔待核' : '',
       'clay',
     ) +
     kpi(
       '参考课酬',
       s.reference_missing && !s.reference_count ? '待核' : money(s.reference_pay),
-      '元',
+      s.reference_missing && !s.reference_count ? '' : '元',
       'earn',
       'fees',
-      s.pending_fees ? s.pending_fees + ' 笔课酬待核' : '按逐节记录试算',
+      s.pending_fees ? s.pending_fees + ' 笔待核' : '',
       'gold',
       { flow: 'reference' },
     ) +
     (admin()
-      ? kpi('琴行总收入', money(s.studio_income), s.studio_income == null ? '' : '元', 'accounts', 'studio_income', '消课金额减去对应课时的老师课酬', 'sage')
+      ? kpi('琴行总收入', money(s.studio_income), s.studio_income == null ? '' : '元', 'accounts', 'studio_income', s.income_missing ? s.income_missing + ' 笔课酬缺金额' : '', 'sage')
       : kpi('累计待付款', money(s.payable), '元', 'accounts', 'payables', '截至 ' + r.end, 'sage'));
   const segments = (act, options, selected) =>
     `<div class="segments compact">${Object.entries(options)
@@ -151,18 +151,18 @@ pages.home = async () => {
   ]), `<span class="muted">截至 ${esc(r.end)}</span>`) : '';
   const numbers = admin()
     ? [
-        ['课包收款待核', yuan(s.receipt_review), s.receipt_review ? '纸卡登记，等待核实到账' : '无待核收款', 'packages', { flow: 'receipt_review' }],
-        ['学生欠费', yuan(s.debt), '待收学费', 'packages', { flow: 'debt' }],
-        ['累计老师待付款', yuan(s.payable), '已确认应付减已付', 'payables', {}],
+        ['课包收款待核', yuan(s.receipt_review), detailUrl('packages', { flow: 'receipt_review' })],
+        ['学生欠费', yuan(s.debt), detailUrl('packages', { flow: 'debt' })],
+        ['累计老师待付款', yuan(s.payable), detailUrl('payables')],
       ]
     : [
-        ['期间已付', yuan(s.paid), '归属本期课酬', 'earnings', {}],
-        ['期间未付', yuan(s.unpaid), '归属本期课酬', 'earnings', {}],
-        ['本期实际付款', yuan(s.actual_paid), '按实际付款日期', 'payments', {}],
+        ['期间已付', yuan(s.paid), detailUrl('earnings'), '归属本期课酬'],
+        ['期间未付', yuan(s.unpaid), detailUrl('earnings'), '归属本期课酬'],
+        ['本期实际付款', yuan(s.actual_paid), detailUrl('payments'), '按付款日期'],
       ];
   const balances = panel(
     admin() ? '期末往来' : '课酬与付款',
-    `<div class="balance-grid">${numbers.map(([l, v, n, k, param]) => `<a href="${esc(detailUrl(k, param))}"><small>${esc(l)}</small><strong>${esc(v)}</strong><span>${esc(n)}</span></a>`).join('')}</div>`,
+    metricLinks(numbers),
     `<span class="muted">截至 ${esc(r.end)}</span>`,
   );
   const alerts = [];
@@ -186,9 +186,9 @@ pages.home = async () => {
     `<div class="mix-list">${r.composition.map((obj) => `<a href="${esc(detailUrl('consumption', { type: obj.type }))}"><span>${esc(types[obj.type])}</span><b>${obj.scenes} 场 · ${qty(obj.units)} 次权益</b><small>已核消课 ${yuan(obj.value)} · 消课均价 ${obj.use_avg == null ? '—' : yuan(obj.use_avg)}${admin() ? ' · 购课均价 ' + (obj.buy_avg == null ? '—' : yuan(obj.buy_avg)) : ''}</small></a>`).join('')}</div>`,
   );
   return (
-    head(admin() ? '经营总览' : '我的工作台', '课量、课酬与账目按所选期间汇总', controls) +
+    head(admin() ? '经营总览' : '我的工作台', '', controls) +
     scopeBar(r) +
-    `<h2 class="scope-heading">所选期间</h2><div class="kpis">${cards}</div>${admin() ? studioIncomePanel(r,session.filter) : ''}${balancesAtDate}${teacherComparison(r, session.filter, true)}${trend}${admin() ? `<a class="retention" href="${esc(detailUrl('retention'))}"><span>${icon('chart')} 本期确认留存</span><strong>${yuan(s.retained)}</strong><small>仅含消课与课酬归属均已确认的记录</small>${icon('chevron')}</a>` : ''}${balances}<div class="duo-grid lower">${todo}${mix}</div>`
+    `<div class="kpis">${cards}</div>${balancesAtDate}${teacherComparison(r, session.filter, true)}${trend}${admin() ? `<a class="retention" href="${esc(detailUrl('retention'))}"><span>${icon('chart')} 本期确认留存</span><strong>${yuan(s.retained)}</strong><small>按已核定课酬</small>${icon('chevron')}</a>` : ''}${balances}<div class="duo-grid lower">${todo}${mix}</div>`
   );
 };
 actions.trend = (el) => {

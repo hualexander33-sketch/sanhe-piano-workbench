@@ -1,27 +1,20 @@
-import { avatar, empty, esc, link, metricLinks, panel, path, table, yuan } from './ui.js';
+import { avatar, empty, esc, icon, link, metricLinks, panel, path, table, yuan } from './ui.js';
 
 export const referencePay = (row) =>
-  row.income_to_studio ? '全额归琴行' : row.reference_missing && !row.reference_count ? '待核' : yuan(row.reference_pay);
+  row.reference_missing && !row.reference_count ? '待核' : yuan(row.reference_pay);
 export const confirmedPay = (row) =>
-  row.earned_entries ? yuan(row.earned) : row.pending_fees ? '待核' : '暂无确认记录';
-export const actualPay = (row) => row.payment_entries ? yuan(row.actual_paid) : '尚无付款登记';
+  row.earned_entries ? yuan(row.earned) : row.pending_fees ? '待核' : '—';
+export const actualPay = (row) => row.payment_entries ? yuan(row.actual_paid) : '—';
 export const detailsPath = (scope, kind, extra = {}) => path('details', { ...scope, kind, ...extra });
 
 export function studioIncomePanel(report, scope) {
   const s = report.stats;
-  const internal = report.compare.find((teacher) => teacher.income_to_studio);
-  const items = [
+  const feeNote = s.income_missing ? s.income_missing + ' 笔缺金额'
+    : s.income_estimated ? '含 ' + s.income_estimated + ' 笔参考课酬' : '';
+  return panel('琴行总收入', metricLinks([
     ['消课金额', yuan(s.income_value), detailsPath(scope, 'consumption')],
-    ['减去老师课酬', yuan(s.lesson_fees), detailsPath(scope, 'studio_income', {flow:'lesson_fees'})],
-  ];
-  if (internal) items.push([internal.name + '消课全额归琴行', yuan(internal.value),
-    detailsPath(scope, 'consumption', {teacher:internal.id}), '已计入消课金额']);
-  const notes = [];
-  if (s.income_estimated) notes.push(s.income_estimated + ' 笔课酬暂按逐节参考金额计算');
-  if (s.income_missing) notes.push(s.income_missing + ' 笔课酬缺少金额，合计待核');
-  return panel('琴行总收入', metricLinks(items) +
-    (notes.length ? `<p class="report-note">${esc(notes.join('。'))}。</p>` : ''),
-    `<a class="income-total" href="${esc(detailsPath(scope, 'studio_income'))}"><small>消课金额 − 老师课酬</small><strong>${yuan(s.studio_income)}</strong></a>`, 'studio-income');
+    ['扣除课酬', yuan(s.lesson_fees), detailsPath(scope, 'studio_income', {flow:'lesson_fees'}), feeNote],
+  ]), `<a class="income-total" href="${esc(detailsPath(scope, 'studio_income'))}" aria-label="琴行总收入明细 ${yuan(s.studio_income)}"><strong>${yuan(s.studio_income)}</strong>${icon('chevron')}</a>`, 'studio-income');
 }
 
 export function teacherComparison(report, scope, withCharts = false) {
@@ -29,9 +22,7 @@ export function teacherComparison(report, scope, withCharts = false) {
   const lesson = { only: 'taught' };
   const substitute = { ...lesson, coverage: 'substitute' };
   const estimate = { flow: 'reference' };
-  const drill = (row, kind, extra) => row.income_to_studio && kind === 'fees' && extra?.flow === 'reference'
-    ? { ...scope, teacher:row.id, kind:'consumption' }
-    : { ...scope, ...(row.id ? {teacher: row.id} : {}), kind, ...extra };
+  const drill = (row, kind, extra) => ({ ...scope, ...(row.id ? {teacher: row.id} : {}), kind, ...extra });
   const number = (row, label, kind, extra) => link('details', label, drill(row, kind, extra));
   const chart = (title, metric, label, kind, extra) => {
     const max = Math.max(1, ...teachers.map((row) => row[metric]));
@@ -52,12 +43,12 @@ export function teacherComparison(report, scope, withCharts = false) {
     number(row, row.minutes + ' 分钟', 'lessons', lesson),
     number(row, yuan(row.value), 'consumption'),
     number(row, referencePay(row), 'fees', estimate),
-    row.income_to_studio && !row.earned_entries ? '无需外付' : confirmedLink(row),
-    row.income_to_studio && !row.payment_entries ? '—' : number(row, actualPay(row), 'payments'),
+    row.earned_entries || row.pending_fees ? confirmedLink(row) : '—',
+    row.payment_entries ? number(row, actualPay(row), 'payments') : '—',
   ]);
   const headers = ['实际老师','已上课时','其中代课','授课时长','消课金额','参考课酬','已确认应付','实际已付'];
   const mobile = lines.map((cells, i) => `<details class="teacher-summary"><summary><b>${esc(teachers[i]?.name || '合计')}</b><span>${esc((teachers[i] || report.stats).scenes)} 节</span><strong>${esc(referencePay(teachers[i] || report.stats))}</strong></summary><dl>${cells.map((cell, index) => `<div><dt>${headers[index]}</dt><dd>${cell}</dd></div>`).join('')}</dl></details>`).join('');
   return charts + panel('老师课时与收入明细',
     `<div class="comparison-wide">${table(headers,lines)}</div><div class="comparison-mobile"><div class="comparison-key">老师 · 已上课时 · 参考课酬</div>${mobile}</div>`
-    + `<p class="report-note">代课已计入实际授课老师的课时。参考课酬按逐节试算汇总，实付按付款日期登记。${report.stats.reference_missing ? esc(report.stats.reference_missing) + ' 笔课酬缺少试算依据。' : ''}</p>`);
+    + (report.stats.reference_missing ? `<p class="report-note">${esc(report.stats.reference_missing)} 笔课酬缺少金额</p>` : ''));
 }
