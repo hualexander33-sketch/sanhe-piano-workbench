@@ -554,6 +554,23 @@ def review_fee(db, a, p):
     return {"id": f["id"], "final": value}
 
 
+def review_teacher_fees(db, a, p):
+    admin(a)
+    teacher = get(db, "teachers", p.get("teacher"))
+    reason = label(p.get("reason"), "核对依据")
+    start, end = day(p.get("start")), day(p.get("end"))
+    require(start <= end, "核对区间倒置")
+    rows = many(db, """SELECT f.id,f.calculated FROM fees f JOIN lessons l ON l.id=f.lesson
+        WHERE l.active=1 AND l.teacher=? AND l.day BETWEEN ? AND ? AND f.status='pending'
+        ORDER BY f.id""", (teacher["id"], start, end))
+    require(rows and all(row["calculated"] is not None for row in rows), "该范围没有可统一核定的参考课酬")
+    require(p.get("items") == [[r["id"], r["calculated"]] for r in rows],
+            "待核明细已经变化，请重新打开核对清单", 409)
+    for row in rows:
+        review_fee(db, a, {"fee": row["id"], "basis": "system", "reason": reason})
+    return {"count": len(rows), "amount": sum(r["calculated"] for r in rows)}
+
+
 def pending_line(db, a, p):
     admin(a)
     r = get(db, "attendance", p.get("line"))

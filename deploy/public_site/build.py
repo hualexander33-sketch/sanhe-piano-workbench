@@ -24,6 +24,9 @@ html=(source/'web/index.html').read_text().replace('/assets/','./assets/').repla
 html=html.replace('./host.js"', './host.js'+version+'"').replace('./assets/style.css"', './assets/style.css'+version+'"')
 html=html.replace('./assets/workspace.css"', './assets/workspace.css'+version+'"')
 (out/'index.html').write_text(html)
+pointer=source/'editor-endpoint.json'
+if pointer.is_file():
+    shutil.copyfile(pointer,out/pointer.name)
 here=Path(__file__).parent
 for f in ('host.js','queries.js'):
     shutil.copyfile(here/f,out/f)

@@ -521,7 +521,7 @@ function result(current) {
 }
 pages.import = async (p) => {
   if (!admin()) throw Error('每周导入需要管理员权限');
-  if(readOnly()) {
+  if(readOnly() || session.meta.shared_edit) {
     if(!p.batch) throw Error('导入文件需要管理身份');
     const [batch,totals]=await Promise.all([read('batch',{id:p.batch,view:'trace',row:p.row,issues:p.issues,trace_page:p.trace_page}),read('batch_totals',{id:p.batch})]);
     const lines=batch.rows.map(r=>[esc(r.row_key),badge(r.status),esc(r.day||'—'),esc(r.teacher?teacher(r.teacher):'—'),esc(r.note||'—'),r.lesson?link('record','授课明细',{id:r.lesson}):'—']);
@@ -555,7 +555,7 @@ pages.batches = async (p) => {
     head(
       '导入批次',
       '追溯原文件、工作表、确认人和问题行',
-      readOnly()?'':btn('import-new', '导入周表', { glyph: 'import', style: 'btn primary' }),
+      (readOnly() || session.meta.shared_edit)?'':btn('import-new', '导入周表', { glyph: 'import', style: 'btn primary' }),
     ) +
     (p.issues==='1'?link('batches','查看全部批次',{},'btn small'):'') +
     panel(

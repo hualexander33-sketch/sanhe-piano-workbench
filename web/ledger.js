@@ -235,7 +235,7 @@ pages.lessons = async (p) => {
   const tab = p.tab || 'lessons',
     q = { ...session.filter, kind: tab },
     more = admin()
-      ? link('batches', '导入批次', {}, 'btn', 'layers') + (canManage()?link('import', '导入周表', {}, 'btn', 'import'):'')
+      ? link('batches', '导入批次', {}, 'btn', 'layers') + (canManage() && !session.meta.shared_edit?link('import', '导入周表', {}, 'btn', 'import'):'')
       : '';
   if (tab === 'lessons') for (const key of ['q','student','pack','coverage','include_versions','only','origin','review']) {
     if (p[key]) q[key] = p[key];
@@ -349,7 +349,7 @@ pages.pack = async ({ id, asof = session.meta.today }) => {
   const names = pk.student_name.split('、');
   const members = pk.member_ids.map((sid,i) => link('profile',names[i] || sid,{ id:sid, asof })).join('、');
   return crumb('students','学生档案',{asof}) + head('课包详情',pk.id + ' · 截至 ' + asof)
-    + panel('课包与缴费',packCard(pk,asof,false),members)
+    + panel('课包与缴费',packCard(pk,asof,false),members + ' ' + entry('package_split','编辑正课与赠课','data-ref="'+esc(pk.id)+'"'))
     + panel('上课记录',lessonTable(used.rows,asof),tag(used.rows.length + ' 条'))
     + (cash ? panel('收退款记录',rowsTable(cash.rows,cols.cash,{},asof),tag(cash.rows.length + ' 笔')) : '');
 };
@@ -680,7 +680,7 @@ pages.record = async ({ id }) => {
     ) +
     panel(
       '记录追溯',
-      `<div class="evidence">${d.history ? '<p>历史展示，已包含期初。</p>' : ''}${d.batch ? link('import', '查看原始导入批次', { batch: d.batch, row:readOnly()?d.evidence?.[0]?.row_key:undefined }) : '<p>来源为手动记课。</p>'}${(d.evidence || []).map((x) => `<p>来源行 ${esc(x.row_key)} · ${esc(x.status)}</p>`).join('')}${d.versions.map((v) => `<p>${link('record', v.id, { id: v.id })} · ${v.active ? '现行版本' : '原始版本'} ${esc(v.change_note)}</p>`).join('')}${d.dependencies ? `<p>后续权益变动 ${d.dependencies.movements?.length || 0} 条 · 已结算 ${d.dependencies.settled?.length || 0} 笔 · 已付款 ${d.dependencies.payments?.length || 0} 笔</p>` : ''}</div>`,
+      `<div class="evidence">${d.history ? '<p>历史展示，已包含期初。</p>' : ''}${d.batch ? link('import', '查看原始导入批次', { batch: d.batch, row:(readOnly() || session.meta.shared_edit)?d.evidence?.[0]?.row_key:undefined }) : '<p>来源为手动记课。</p>'}${(d.evidence || []).map((x) => `<p>来源行 ${esc(x.row_key)} · ${esc(x.status)}</p>`).join('')}${d.versions.map((v) => `<p>${link('record', v.id, { id: v.id })} · ${v.active ? '现行版本' : '原始版本'} ${esc(v.change_note)}</p>`).join('')}${d.dependencies ? `<p>后续权益变动 ${d.dependencies.movements?.length || 0} 条 · 已结算 ${d.dependencies.settled?.length || 0} 笔 · 已付款 ${d.dependencies.payments?.length || 0} 笔</p>` : ''}</div>`,
     )
   );
 };

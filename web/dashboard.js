@@ -54,7 +54,8 @@ pages.home = async () => {
     full = admin();
   const drill = (kind, x = {}) => detailsPath(q, kind, x);
   const tools =
-    (canManage() ? link('import', '导入周表', {}, 'btn', 'import') : '') +
+    (admin() ? link('review','数据核对',{},'btn') : '') +
+    (canManage() && !session.meta.shared_edit ? link('import', '导入周表', {}, 'btn', 'import') : '') +
     (canRecord() ? link('manual', '手动记课', {}, 'btn primary', 'plus') : '');
   const incomeLabel = s.income_missing
     ? '留存待核'

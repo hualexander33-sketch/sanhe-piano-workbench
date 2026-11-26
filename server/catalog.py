@@ -135,6 +135,12 @@ def student(db, a, p):
         substitute,
     )
     if old:
+        original = {k: old[k] for k in (
+            "name", "category", "contact", "course", "main_teacher", "enrolled", "status", "substitute_teacher")}
+        if tuple(original.values()) == vals:
+            return {"id": sid, "changed": False}
+        if p.get("expected") is not None:
+            require(p["expected"] == original, "这份档案刚被他人修改，请重新打开后保存", 409)
         db.execute(
             "UPDATE students SET name=?,category=?,contact=?,course=?,main_teacher=?,enrolled=?,status=?,substitute_teacher=? WHERE id=?",
             (*vals, sid),
@@ -251,6 +257,22 @@ def package(db, a, p):
         cash_entry(db, a, pid, when, received, "receipt", p.get("method") or "微信", "购课收款")
     audit(db, a, "期初课包" if opening else "新课包", pid, p)
     return {"id": pid}
+
+
+def split_package(db, a, p):
+    admin(a)
+    pack = get(db, "packages", p.get("pack"))
+    before = [pack["paid_units"], pack["gift_units"], int(bool(one(
+        db, "SELECT 1 FROM paper_unsplit_packages WHERE pack=?", (pack["id"],))))]
+    paid, gift = units(p.get("purchased")), units(p.get("gift"))
+    require(paid + gift == sum(before[:2]), "正课和赠课相加须等于课包原登记总课时")
+    if before == [paid, gift, 0]:
+        return {"id": pack["id"], "changed": False}
+    require(p.get("expected") == before, "这个课包刚被他人修改，请重新打开后保存", 409)
+    db.execute("UPDATE packages SET paid_units=?,gift_units=? WHERE id=?", (paid, gift, pack["id"]))
+    db.execute("DELETE FROM paper_unsplit_packages WHERE pack=?", (pack["id"],))
+    audit(db, a, "核对课包拆分", pack["id"], {"before": before, "purchased": paid, "gift": gift})
+    return {"id": pack["id"]}
 
 
 def collect(db, a, p):

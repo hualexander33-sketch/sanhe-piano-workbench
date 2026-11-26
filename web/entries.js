@@ -54,6 +54,7 @@ const select = (key, label, options, value = '', required = true) =>
 const titles = {
   student: '学生建档',
   package: '购课 / 续费',
+  package_split: '核对正课与赠课',
   opening: '登记期初课包',
   receipt: '学费补款',
   refund: '退款与退课',
@@ -84,7 +85,7 @@ actions.entry = async (el) => {
     now = m.today;
   if (mode !== 'request_change' && !admin()) throw Error('此操作需要管理员权限');
   const needsStudents = ['student', 'package', 'opening', 'access'].includes(mode);
-  const needsPacks = ['receipt', 'refund', 'convert', 'resolve_line', 'archive_cash'].includes(mode);
+  const needsPacks = ['receipt', 'refund', 'convert', 'resolve_line', 'archive_cash', 'package_split'].includes(mode);
   const [ss, pk] = await Promise.all([
     needsStudents ? read('students') : [],
     needsPacks ? read('packages') : [],
@@ -128,6 +129,17 @@ actions.entry = async (el) => {
         select('status', '在读状态', ['在读', '暂停', '结课', '待确认'], st.status),
       ];
       break;
+    case 'package_split': {
+      const pack = pk.find(item => item.id === ref);
+      if (!pack) throw Error('找不到这个课包');
+      title = pack.student_name + ' · 核对课包';
+      fields = [
+        field('total', '登记总课时', {value: qty(pack.paid_units + pack.gift_units), attrs: 'readonly'}),
+        qtyField('purchased', '正课（节）', pack.split_unknown ? '' : pack.paid_units / 1000),
+        qtyField('gift', '赠课（节）', pack.split_unknown ? '' : pack.gift_units / 1000),
+      ];
+      break;
+    }
     case 'package':
     case 'opening':
       fields = [
@@ -203,7 +215,7 @@ actions.entry = async (el) => {
       break;
     case 'archive_cash':
       fields = [
-        select('kind', '原凭证类型', { receipt: '学费收款', refund: '学费退款', payment: '教师付款' }),
+        select('kind', '原凭证类型', { receipt: '学费收款', refund: '学费退款', payment: '教师付款' }, el.dataset.kind || 'receipt'),
         field('pack', '学费所属课包', { options: pOptions }),
         field('teacher', '老师付款对象', { options: tOptions }),
         date('day', '原凭证日期', ''),
@@ -296,9 +308,17 @@ actions.entry = async (el) => {
       throw Error('未识别此项操作');
   }
   entryState = { mode, ref, bill: el.dataset.bill || '', edit: !!st.id && mode === 'student' };
+  if (entryState.edit) {
+    const fields = ['name', 'category', 'contact', 'course', 'main_teacher', 'enrolled', 'status', 'substitute_teacher'];
+    entryState.expected = Object.fromEntries(fields.map(key => [key, st[key] ?? null]));
+  }
+  if (mode === 'package_split') {
+    const pack = pk.find(item => item.id === ref);
+    entryState.expected = [pack.paid_units, pack.gift_units, Number(pack.split_unknown)];
+  }
   showDialog(
     title,
-    `<form data-form="entry"><div class="form-grid">${fields.join('')}</div>${suffix}<div class="form-foot">${submitButton(submit)}</div></form>`,
+    `<form data-form="entry"><div class="form-grid">${fields.join('')}</div>${suffix}<div class="form-error" role="alert"></div><div class="form-foot">${submitButton(submit)}</div></form>`,
   );
 };
 forms.entry = async (f) => {
@@ -344,7 +364,15 @@ forms.entry = async (f) => {
         delete p['carry_fee_' + r.id];
       }
   }
-  if (mode === 'student' && edit) p.edit = true;
+  if (mode === 'student' && edit) {
+    p.edit = true;
+    p.expected = entryState.expected;
+  }
+  if (mode === 'package_split') {
+    p.pack = ref;
+    p.expected = entryState.expected;
+    delete p.total;
+  }
   if (mode === 'receipt' || mode === 'refund') p.kind = mode;
   if (p.contract_reduction === '') delete p.contract_reduction;
   if (mode === 'pay' && bill) p.settlement = bill;
@@ -361,10 +389,14 @@ forms.entry = async (f) => {
   let result;
   if (mode === 'new_account') result = await api('/api/web/accounts', { data: p });
   else result = await write({ opening: 'package', refund: 'cash', receipt: 'cash' }[mode] || mode, p);
-  toast('已保存');
+  toast(result.changed === false ? '已核对，内容一致' : '已保存');
   closeDialog();
   session.meta = { ...session.meta, ...(await read('meta')) };
-  if (mode === 'student') go('profile', { id: result.id });
+  if (location.hash.startsWith('#/review')) reload();
+  else if (mode === 'student') {
+    if (location.hash === '#/profile?id=' + encodeURIComponent(result.id)) reload();
+    else go('profile', { id: result.id });
+  }
   else if (['package', 'opening'].includes(mode)) go('profile', { id: p.student });
   else reload();
 };
